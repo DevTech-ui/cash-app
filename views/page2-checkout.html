@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout — Payment</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #050508;
+      --surface: #0f0f18;
+      --surface2: #141420;
+      --border: rgba(255,255,255,0.08);
+      --green: #00C853;
+      --green-glow: rgba(0,200,83,0.25);
+      --text: #f0f0f0;
+      --muted: #6b6b7a;
+      --input-bg: #1a1a28;
+      --red: #FF453A;
+    }
+
+    html, body {
+      height: 100%; min-height: 100vh;
+      font-family: 'Sora', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 20% 20%, rgba(0,200,83,0.07) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 60% at 80% 80%, rgba(0,100,255,0.05) 0%, transparent 60%);
+      pointer-events: none; z-index: 0;
+    }
+
+    .page {
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 24px; position: relative; z-index: 1;
+    }
+
+    .steps {
+      display: flex; gap: 8px; margin-bottom: 48px; align-items: center;
+    }
+    .step {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+      border: 2px solid var(--border); color: var(--muted);
+    }
+    .step.active { background: var(--green); border-color: var(--green); color: #000; box-shadow: 0 0 20px var(--green-glow); }
+    .step.done   { border-color: var(--green); color: var(--green); }
+    .step-line   { width: 40px; height: 2px; background: var(--border); }
+    .step-line.done { background: var(--green); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px;
+      width: 100%; max-width: 480px;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+      animation: slideUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes slideUp {
+      from { opacity:0; transform:translateY(24px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+
+    .email-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 100px; padding: 6px 14px 6px 10px;
+      font-size: 13px; color: var(--muted); margin-bottom: 28px;
+    }
+    .email-chip span { color: var(--text); }
+
+    h1 {
+      font-size: 26px; font-weight: 800;
+      letter-spacing: -0.5px; margin-bottom: 8px; line-height: 1.2;
+    }
+    h1 em { color: var(--green); font-style: normal; }
+    .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 30px; }
+
+    /* Amount input */
+    .amount-section { margin-bottom: 28px; }
+    .amount-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--muted); margin-bottom: 12px;
+    }
+    .amount-wrap {
+      position: relative;
+    }
+    .currency-symbol {
+      position: absolute; left: 18px; top: 50%; transform: translateY(-50%);
+      font-size: 22px; font-weight: 700; color: var(--green);
+      pointer-events: none; z-index: 1;
+    }
+    input[type="number"] {
+      width: 100%;
+      background: var(--input-bg);
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 20px 20px 44px;
+      font-family: 'Sora', sans-serif;
+      font-size: 28px; font-weight: 800;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      -moz-appearance: textfield;
+    }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    input[type="number"]:focus {
+      border-color: var(--green);
+      box-shadow: 0 0 0 4px var(--green-glow);
+    }
+    input[type="number"]::placeholder { color: #2a2a3a; }
+
+    /* Quick amount pills */
+    .quick-amounts {
+      display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;
+    }
+    .quick-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 100px; padding: 6px 14px;
+      font-family: 'Sora', sans-serif; font-size: 13px; font-weight: 600;
+      color: var(--muted); cursor: pointer; transition: all 0.15s;
+    }
+    .quick-btn:hover {
+      border-color: var(--green); color: var(--green);
+      background: rgba(0,200,83,0.05);
+    }
+
+    /* Divider */
+    .divider {
+      border: none; border-top: 1px solid var(--border);
+      margin: 28px 0;
+    }
+
+    /* Square Web Payments container */
+    #cash-app-pay {
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Loading state for Cash App Pay */
+    .cash-app-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .cash-app-spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    /* Status messages */
+    .status-msg {
+      display: none; align-items: center; gap: 10px;
+      padding: 14px 16px; border-radius: 10px;
+      font-size: 13px; margin-top: 16px;
+      animation: fadeIn 0.3s ease;
+    }
+    .status-msg.show { display: flex; }
+    .status-msg.error { background: rgba(255,69,58,0.1); border: 1px solid rgba(255,69,58,0.2); color: #ff6b63; }
+    .status-msg.info  { background: rgba(0,200,83,0.08); border: 1px solid rgba(0,200,83,0.15); color: #4cd87a; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+
+    /* Processing overlay */
+    .processing-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(5,5,8,0.85); backdrop-filter: blur(8px);
+      z-index: 100; align-items: center; justify-content: center;
+      flex-direction: column; gap: 20px;
+    }
+    .processing-overlay.show { display: flex; }
+    .big-spinner {
+      width: 56px; height: 56px;
+      border: 3px solid rgba(0,200,83,0.2);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .processing-text { font-size: 16px; font-weight: 600; color: var(--text); }
+    .processing-sub  { font-size: 13px; color: var(--muted); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Full page loading overlay */
+    .page-loading-overlay {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      z-index: 200; display: flex;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 20px;
+    }
+    .page-loading-overlay.hide { display: none; }
+    .page-loader {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 16px;
+      text-align: center;
+    }
+    .loading-text { font-size: 18px; font-weight: 600; color: var(--text); }
+    .loading-sub  { font-size: 14px; color: var(--muted); }
+
+    /* Footer note */
+    .footer-note {
+      display: flex; align-items: center; justify-content: center;
+      gap: 6px; margin-top: 20px;
+      font-size: 11px; color: var(--muted); text-align: center;
+    }
+
+    @media (max-width: 480px) {
+      .card { padding: 28px 20px; }
+      h1 { font-size: 22px; }
+      input[type="number"] { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Processing overlay -->
+  <div class="processing-overlay" id="processingOverlay">
+    <div class="big-spinner"></div>
+    <div class="processing-text">Processing your payment…</div>
+    <div class="processing-sub">Please don't close this window</div>
+  </div>
+
+  <!-- Full page loading overlay -->
+  <div class="page-loading-overlay" id="pageLoadingOverlay">
+    <div class="page-loader">
+      <div class="big-spinner"></div>
+      <div class="loading-text">Loading checkout...</div>
+      <div class="loading-sub">Setting up secure payment</div>
+    </div>
+  </div>
+
+  <div class="page">
+
+    <div class="steps">
+      <div class="step done">✓</div>
+      <div class="step-line done"></div>
+      <div class="step active">2</div>
+      <div class="step-line"></div>
+      <div class="step">3</div>
+    </div>
+
+    <div class="card">
+
+      <div class="email-chip">
+        ✉️ <span id="emailDisplay">Loading…</span>
+      </div>
+
+      <h1>Enter <em>amount</em> &amp; pay</h1>
+      <p class="subtitle">Type your amount below, then tap the Cash App Pay button.</p>
+
+      <!-- Amount input -->
+      <div class="amount-section">
+        <div class="amount-label">Payment Amount (USD)</div>
+        <div class="amount-wrap">
+          <span class="currency-symbol">$</span>
+          <input
+            type="number"
+            id="amountInput"
+            placeholder="0.00"
+            min="1"
+            step="0.01"
+          />
+        </div>
+        <div class="quick-amounts">
+          <button class="quick-btn" onclick="setAmount(10)">$10</button>
+          <button class="quick-btn" onclick="setAmount(25)">$25</button>
+          <button class="quick-btn" onclick="setAmount(50)">$50</button>
+          <button class="quick-btn" onclick="setAmount(100)">$100</button>
+          <button class="quick-btn" onclick="setAmount(250)">$250</button>
+        </div>
+      </div>
+
+      <hr class="divider" />
+
+      <!-- Square Cash App Pay button renders here -->
+      <div id="cash-app-pay">
+        <div class="cash-app-loading" id="cashAppLoading">
+          <div class="cash-app-spinner"></div>
+          <span>Loading Cash App Pay...</span>
+        </div>
+      </div>
+
+      <div class="status-msg error" id="errorMsg">
+        <span>⚠️</span>
+        <span id="errorText">Something went wrong. Please try again.</span>
+      </div>
+      <div class="status-msg info" id="infoMsg">
+        <span>ℹ️</span>
+        <span id="infoText"></span>
+      </div>
+
+      <div class="footer-note">
+        🔒 Secured by Square · Cash App Pay only
+      </div>
+
+    </div>
+  </div>
+
+  <!--
+    Square Web Payments SDK
+    Sandbox:    https://sandbox.web.squarecdn.com/v1/square.js
+    Production: https://web.squarecdn.com/v1/square.js
+    The script below is dynamically loaded based on environment.
+  -->
+  <script>
+    // ─── State ────────────────────────────────────────────────────────────────
+    let customerEmail = '';
+    let payments = null;
+    let cashAppPay = null;
+    let squareConfig = {};
+
+    // ─── On load ──────────────────────────────────────────────────────────────
+    window.addEventListener('DOMContentLoaded', async () => {
+      // Show full page loading overlay
+      document.getElementById('pageLoadingOverlay').classList.remove('hide');
+
+      // Retrieve email saved on page 1
+      customerEmail = sessionStorage.getItem('checkoutEmail') || '';
+      if (!customerEmail) {
+        window.location.href = '/';
+        return;
+      }
+      document.getElementById('emailDisplay').textContent = customerEmail;
+
+      // Fetch Square config from server
+      const configRes = await fetch('/api/square-config');
+      squareConfig = await configRes.json();
+
+      // Dynamically load the right Square SDK
+      const sdkUrl = squareConfig.environment === 'production'
+        ? 'https://web.squarecdn.com/v1/square.js'
+        : 'https://sandbox.web.squarecdn.com/v1/square.js';
+
+      const script = document.createElement('script');
+      script.src = sdkUrl;
+      script.onload = initSquare;
+      script.onerror = () => {
+        document.getElementById('pageLoadingOverlay').classList.add('hide');
+        showError('Failed to load payment SDK. Please refresh.');
+      };
+      document.head.appendChild(script);
+    });
+
+    // ─── Init Square Web Payments SDK ─────────────────────────────────────────
+    async function initSquare() {
+      try {
+        payments = Square.payments(squareConfig.appId, squareConfig.locationId);
+        await mountCashAppPay();
+      } catch (err) {
+        console.error('Square init error:', err);
+        // Hide page loading overlay and show error
+        document.getElementById('pageLoadingOverlay').classList.add('hide');
+        showError('Could not initialize payment form. Check your Square credentials.');
+      }
+    }
+
+    // ─── Mount Cash App Pay button ────────────────────────────────────────────
+    async function mountCashAppPay() {
+      const amount = getAmount();
+
+      // Destroy old instance if re-mounting
+      if (cashAppPay) {
+        await cashAppPay.destroy();
+        cashAppPay = null;
+      }
+
+      // Show loading state
+      const loadingEl = document.getElementById('cashAppLoading');
+      if (loadingEl) {
+        loadingEl.style.display = 'flex';
+      }
+
+      try {
+        const paymentRequest = payments.paymentRequest({
+          countryCode: 'US',
+          currencyCode: 'USD',
+          total: {
+            amount: amount > 0 ? amount.toFixed(2) : '1.00',
+            label: 'Total',
+          },
+        });
+
+        cashAppPay = await payments.cashAppPay(paymentRequest, {
+          redirectURL: window.location.origin + '/result',
+          referenceId: `checkout-${Date.now()}`,
+        });
+
+        await cashAppPay.attach('#cash-app-pay');
+
+        // Hide loading states and show the button
+        const loadingEl = document.getElementById('cashAppLoading');
+        if (loadingEl) {
+          loadingEl.style.display = 'none';
+        }
+        document.getElementById('pageLoadingOverlay').classList.add('hide');
+
+        cashAppPay.addEventListener('ontokenization', handleToken);
+
+      } catch (err) {
+        console.error('CashApp mount error:', err);
+        // Hide loading overlays and show error
+        document.getElementById('pageLoadingOverlay').classList.add('hide');
+        const loadingEl = document.getElementById('cashAppLoading');
+        if (loadingEl) {
+          loadingEl.style.display = 'none';
+        }
+        showError('Could not load Cash App Pay. Make sure Cash App Pay is enabled in your Square dashboard.');
+      }
+    }
+
+    // ─── Handle Square tokenization ───────────────────────────────────────────
+    async function handleToken(event) {
+      const { tokenResult } = event.detail;
+
+      if (tokenResult.status === 'OK') {
+        const amount = getAmount();
+
+        if (!amount || amount < 1) {
+          showError('Please enter a valid amount (minimum $1.00).');
+          return;
+        }
+
+        document.getElementById('processingOverlay').classList.add('show');
+        hideMessages();
+
+        try {
+          // Store amount for page 3 display
+          sessionStorage.setItem('paymentAmount', amount.toFixed(2));
+
+          const res = await fetch('/api/create-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sourceId: tokenResult.token,
+              amount: amount.toFixed(2),
+              email: customerEmail,
+              note: 'Cash App Pay checkout',
+            }),
+          });
+
+          const data = await res.json();
+
+          document.getElementById('processingOverlay').classList.remove('show');
+
+          if (data.success) {
+            sessionStorage.setItem('paymentStatus', 'success');
+            sessionStorage.setItem('paymentId', data.paymentId || '');
+            window.location.href = '/result';
+          } else {
+            sessionStorage.setItem('paymentStatus', 'failed');
+            window.location.href = '/result';
+          }
+        } catch (err) {
+          document.getElementById('processingOverlay').classList.remove('show');
+          sessionStorage.setItem('paymentStatus', 'failed');
+          window.location.href = '/result';
+        }
+
+      } else if (tokenResult.status === 'Cancel') {
+        showInfo('Payment was cancelled. You can try again.');
+      } else {
+        showError('Payment failed: ' + (tokenResult.errors?.[0]?.message || 'Unknown error'));
+      }
+    }
+
+    // ─── Amount helpers ───────────────────────────────────────────────────────
+    function getAmount() {
+      const val = parseFloat(document.getElementById('amountInput').value);
+      return isNaN(val) ? 0 : val;
+    }
+
+    function setAmount(val) {
+      document.getElementById('amountInput').value = val;
+      // Re-mount Cash App Pay with updated amount
+      mountCashAppPay();
+    }
+
+    // Re-mount when amount changes (so Square payment request reflects correct total)
+    let remountTimer;
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('amountInput').addEventListener('change', () => {
+        clearTimeout(remountTimer);
+        remountTimer = setTimeout(mountCashAppPay, 500);
+      });
+    });
+
+    // ─── UI helpers ───────────────────────────────────────────────────────────
+    function showError(msg) {
+      document.getElementById('errorText').textContent = msg;
+      document.getElementById('errorMsg').classList.add('show');
+      document.getElementById('infoMsg').classList.remove('show');
+    }
+    function showInfo(msg) {
+      document.getElementById('infoText').textContent = msg;
+      document.getElementById('infoMsg').classList.add('show');
+      document.getElementById('errorMsg').classList.remove('show');
+    }
+    function hideMessages() {
+      document.getElementById('errorMsg').classList.remove('show');
+      document.getElementById('infoMsg').classList.remove('show');
+    }
+  </script>
+</body>
+</html>

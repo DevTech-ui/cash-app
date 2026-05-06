@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout — Enter Your Email</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #050508;
+      --surface: #0f0f18;
+      --border: rgba(255,255,255,0.08);
+      --green: #00C853;
+      --green-glow: rgba(0,200,83,0.25);
+      --text: #f0f0f0;
+      --muted: #6b6b7a;
+      --input-bg: #1a1a28;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: 'Sora', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* Animated background mesh */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 20% 20%, rgba(0,200,83,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 60% at 80% 80%, rgba(0,100,255,0.06) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Step indicator */
+    .steps {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 48px;
+      align-items: center;
+    }
+    .step {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+      border: 2px solid var(--border);
+      color: var(--muted);
+      transition: all 0.3s;
+    }
+    .step.active {
+      background: var(--green);
+      border-color: var(--green);
+      color: #000;
+      box-shadow: 0 0 20px var(--green-glow);
+    }
+    .step.done {
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .step-line {
+      width: 40px; height: 2px;
+      background: var(--border);
+    }
+
+    /* Card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 460px;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+      animation: slideUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .cashapp-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .cashapp-icon {
+      width: 44px; height: 44px;
+      background: var(--green);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      font-weight: 900;
+      color: #000;
+      box-shadow: 0 0 24px var(--green-glow);
+    }
+    .cashapp-label {
+      font-size: 13px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+    .cashapp-label strong {
+      display: block;
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1.2;
+      letter-spacing: -0.5px;
+      margin-bottom: 10px;
+    }
+    h1 span { color: var(--green); }
+
+    .subtitle {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 36px;
+      line-height: 1.6;
+    }
+
+    /* Form */
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .input-wrap {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    .input-icon {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      pointer-events: none;
+    }
+    input[type="email"] {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 16px 16px 48px;
+      font-family: 'Sora', sans-serif;
+      font-size: 15px;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input[type="email"]:focus {
+      border-color: var(--green);
+      box-shadow: 0 0 0 4px var(--green-glow);
+    }
+    input[type="email"]::placeholder { color: #3a3a50; }
+
+    .error-msg {
+      display: none;
+      font-size: 12px;
+      color: #ff453a;
+      margin-top: -12px;
+      margin-bottom: 16px;
+      padding-left: 4px;
+    }
+    .error-msg.show { display: block; }
+
+    .btn {
+      width: 100%;
+      padding: 17px;
+      background: var(--green);
+      color: #000;
+      font-family: 'Sora', sans-serif;
+      font-size: 15px;
+      font-weight: 700;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.3px;
+      position: relative;
+      overflow: hidden;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 30px var(--green-glow);
+    }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2px solid rgba(0,0,0,0.3);
+      border-top-color: #000;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      position: absolute;
+      right: 20px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .btn.loading .spinner { display: block; }
+    @keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+
+    .secure-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .secure-note::before { content: '🔒'; font-size: 11px; }
+
+    @media (max-width: 480px) {
+      .card { padding: 32px 24px; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <div class="steps">
+      <div class="step active">1</div>
+      <div class="step-line"></div>
+      <div class="step">2</div>
+      <div class="step-line"></div>
+      <div class="step">3</div>
+    </div>
+
+    <div class="card">
+      <div class="cashapp-badge">
+        <div class="cashapp-icon">$</div>
+        <div class="cashapp-label">
+          <strong>Secure Checkout</strong>
+          Powered by Cash App Pay
+        </div>
+      </div>
+
+      <h1>Let's get <span>started</span></h1>
+      <p class="subtitle">Enter your email to continue. We'll send your payment confirmation here.</p>
+
+      <form id="emailForm" novalidate>
+        <label for="email">Email Address</label>
+        <div class="input-wrap">
+          <span class="input-icon">✉️</span>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            placeholder="you@example.com"
+            autocomplete="email"
+            required
+          />
+        </div>
+        <div class="error-msg" id="errorMsg">Please enter a valid email address.</div>
+
+        <button type="submit" class="btn" id="submitBtn">
+          Continue to Payment
+          <span class="spinner"></span>
+        </button>
+      </form>
+
+      <div class="secure-note">Your email is never shared or sold</div>
+    </div>
+
+  </div>
+
+  <script>
+    const form = document.getElementById('emailForm');
+    const emailInput = document.getElementById('email');
+    const submitBtn = document.getElementById('submitBtn');
+    const errorMsg = document.getElementById('errorMsg');
+
+    function isValidEmail(email) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = emailInput.value.trim();
+
+      errorMsg.classList.remove('show');
+
+      if (!isValidEmail(email)) {
+        errorMsg.classList.add('show');
+        emailInput.focus();
+        return;
+      }
+
+      // Save to server
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.querySelector('span:not(.spinner)') || null;
+
+      try {
+        const res = await fetch('/api/save-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // Store email in sessionStorage for use on next pages
+          sessionStorage.setItem('checkoutEmail', email);
+          window.location.href = '/checkout';
+        } else {
+          errorMsg.textContent = data.message || 'Something went wrong. Please try again.';
+          errorMsg.classList.add('show');
+          submitBtn.disabled = false;
+          submitBtn.classList.remove('loading');
+        }
+      } catch (err) {
+        errorMsg.textContent = 'Network error. Please check your connection.';
+        errorMsg.classList.add('show');
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+      }
+    });
+
+    // Clear error on input
+    emailInput.addEventListener('input', () => errorMsg.classList.remove('show'));
+  </script>
+</body>
+</html>

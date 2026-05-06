@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment Result</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #050508;
+      --surface: #0f0f18;
+      --border: rgba(255,255,255,0.08);
+      --green: #00C853;
+      --green-glow: rgba(0,200,83,0.3);
+      --red: #FF453A;
+      --red-glow: rgba(255,69,58,0.25);
+      --text: #f0f0f0;
+      --muted: #6b6b7a;
+      --input-bg: #1a1a28;
+    }
+
+    html, body {
+      height: 100%; min-height: 100vh;
+      font-family: 'Sora', sans-serif;
+      background: var(--bg); color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* Dynamic background based on result */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: var(--result-bg, radial-gradient(ellipse 70% 60% at 50% 30%, rgba(0,200,83,0.08) 0%, transparent 60%));
+      pointer-events: none; z-index: 0;
+      transition: background 0.5s;
+    }
+    body.failed::before {
+      background: radial-gradient(ellipse 70% 60% at 50% 30%, rgba(255,69,58,0.08) 0%, transparent 60%);
+    }
+
+    .page {
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 24px; position: relative; z-index: 1;
+    }
+
+    .steps {
+      display: flex; gap: 8px; margin-bottom: 48px; align-items: center;
+    }
+    .step {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+      border: 2px solid var(--border); color: var(--muted);
+    }
+    .step.done   { border-color: var(--green); color: var(--green); }
+    .step.active { background: var(--green); border-color: var(--green); color: #000; box-shadow: 0 0 20px var(--green-glow); }
+    .step.fail   { background: var(--red); border-color: var(--red); color: #fff; box-shadow: 0 0 20px var(--red-glow); }
+    .step-line   { width: 40px; height: 2px; background: var(--border); }
+    .step-line.done { background: var(--green); }
+    .step-line.fail { background: var(--red); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 48px 40px;
+      width: 100%; max-width: 460px;
+      text-align: center;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+      animation: popIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes popIn {
+      from { opacity:0; transform: scale(0.92) translateY(20px); }
+      to   { opacity:1; transform: scale(1) translateY(0); }
+    }
+
+    /* Icon circle */
+    .result-icon {
+      width: 96px; height: 96px;
+      border-radius: 50%;
+      margin: 0 auto 28px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 40px;
+      position: relative;
+      animation: iconPop 0.5s 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes iconPop {
+      from { opacity:0; transform: scale(0.5); }
+      to   { opacity:1; transform: scale(1); }
+    }
+    .result-icon.success {
+      background: rgba(0,200,83,0.12);
+      border: 2px solid rgba(0,200,83,0.3);
+      box-shadow: 0 0 40px var(--green-glow), 0 0 80px rgba(0,200,83,0.1);
+    }
+    .result-icon.failed {
+      background: rgba(255,69,58,0.12);
+      border: 2px solid rgba(255,69,58,0.3);
+      box-shadow: 0 0 40px var(--red-glow), 0 0 80px rgba(255,69,58,0.1);
+    }
+
+    /* Pulsing ring */
+    .result-icon.success::after {
+      content: '';
+      position: absolute; inset: -12px;
+      border-radius: 50%;
+      border: 1px solid rgba(0,200,83,0.2);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity:1; }
+      50%       { transform: scale(1.1); opacity:0.4; }
+    }
+
+    h1 {
+      font-size: 30px; font-weight: 800;
+      letter-spacing: -0.5px; line-height: 1.2;
+      margin-bottom: 10px;
+    }
+    h1.success { color: var(--green); }
+    h1.failed  { color: var(--red); }
+
+    .result-subtitle {
+      font-size: 14px; color: var(--muted);
+      line-height: 1.6; margin-bottom: 32px;
+    }
+
+    /* Amount display */
+    .amount-display {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .amount-label-sm {
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 1px;
+      color: var(--muted); margin-bottom: 6px;
+    }
+    .amount-value {
+      font-size: 38px; font-weight: 800;
+      letter-spacing: -1px;
+    }
+    .amount-value.success { color: var(--green); }
+    .amount-value.failed  { color: var(--red); }
+
+    /* Details rows */
+    .details {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-bottom: 28px;
+      text-align: left;
+    }
+    .detail-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-key {
+      font-size: 12px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      color: var(--muted);
+    }
+    .detail-val {
+      font-size: 13px; font-weight: 600;
+      color: var(--text); font-family: monospace;
+      max-width: 200px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    /* Buttons */
+    .btn {
+      display: block; width: 100%;
+      padding: 16px;
+      border-radius: 12px;
+      font-family: 'Sora', sans-serif;
+      font-size: 14px; font-weight: 700;
+      cursor: pointer; text-decoration: none;
+      text-align: center; border: none;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--green); color: #000;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 30px var(--green-glow); }
+    .btn-secondary {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); margin-top: 10px;
+    }
+    .btn-secondary:hover { border-color: var(--green); color: var(--green); }
+    .btn-danger {
+      background: var(--red); color: #fff;
+    }
+    .btn-danger:hover { transform: translateY(-1px); box-shadow: 0 8px 30px var(--red-glow); }
+
+    /* Email sent note */
+    .email-note {
+      display: flex; align-items: center;
+      gap: 8px; justify-content: center;
+      font-size: 12px; color: var(--muted);
+      margin-top: 20px;
+    }
+
+    @media (max-width: 480px) {
+      .card { padding: 32px 20px; }
+      h1 { font-size: 26px; }
+      .amount-value { font-size: 30px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page">
+
+    <div class="steps" id="stepsContainer">
+      <div class="step done">✓</div>
+      <div class="step-line done"></div>
+      <div class="step done">✓</div>
+      <div class="step-line" id="lastLine"></div>
+      <div class="step" id="finalStep">3</div>
+    </div>
+
+    <div class="card" id="resultCard">
+      <!-- Filled dynamically -->
+    </div>
+
+  </div>
+
+  <script>
+    const status    = sessionStorage.getItem('paymentStatus') || 'failed';
+    const amount    = sessionStorage.getItem('paymentAmount') || '0.00';
+    const paymentId = sessionStorage.getItem('paymentId') || '';
+    const email     = sessionStorage.getItem('checkoutEmail') || '';
+    const isSuccess = status === 'success';
+
+    // ─── Set page theme ───────────────────────────────────────────────────────
+    if (!isSuccess) document.body.classList.add('failed');
+
+    // ─── Step indicators ──────────────────────────────────────────────────────
+    const lastLine  = document.getElementById('lastLine');
+    const finalStep = document.getElementById('finalStep');
+    if (isSuccess) {
+      lastLine.classList.add('done');
+      finalStep.classList.add('active');
+      finalStep.textContent = '✓';
+    } else {
+      lastLine.classList.add('fail');
+      finalStep.classList.add('fail');
+      finalStep.textContent = '✗';
+    }
+
+    // ─── Render card content ──────────────────────────────────────────────────
+    const card = document.getElementById('resultCard');
+
+    if (isSuccess) {
+      card.innerHTML = `
+        <div class="result-icon success">✅</div>
+        <h1 class="success">Payment Successful!</h1>
+        <p class="result-subtitle">
+          Your payment of <strong style="color:#fff">$${parseFloat(amount).toFixed(2)}</strong> was received successfully.
+          A confirmation email has been sent to you.
+        </p>
+
+        <div class="amount-display">
+          <div class="amount-label-sm">Amount Paid</div>
+          <div class="amount-value success">$${parseFloat(amount).toFixed(2)}</div>
+        </div>
+
+        <div class="details">
+          <div class="detail-row">
+            <span class="detail-key">Status</span>
+            <span class="detail-val" style="color:#00C853">✓ Completed</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">Method</span>
+            <span class="detail-val">Cash App Pay</span>
+          </div>
+          ${paymentId ? `
+          <div class="detail-row">
+            <span class="detail-key">Transaction ID</span>
+            <span class="detail-val">${paymentId}</span>
+          </div>` : ''}
+          ${email ? `
+          <div class="detail-row">
+            <span class="detail-key">Email</span>
+            <span class="detail-val">${email}</span>
+          </div>` : ''}
+          <div class="detail-row">
+            <span class="detail-key">Date</span>
+            <span class="detail-val">${new Date().toLocaleString()}</span>
+          </div>
+        </div>
+
+        <a href="/" class="btn btn-secondary">← Make Another Payment</a>
+
+        <div class="email-note">
+          ✉️ Confirmation sent to ${email || 'your email'}
+        </div>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="result-icon failed">❌</div>
+        <h1 class="failed">Payment Failed</h1>
+        <p class="result-subtitle">
+          Unfortunately, your payment of <strong style="color:#fff">$${parseFloat(amount).toFixed(2)}</strong> could not be processed.
+          ${email ? 'We\'ve sent you an email with details.' : ''}
+        </p>
+
+        <div class="amount-display">
+          <div class="amount-label-sm">Amount Attempted</div>
+          <div class="amount-value failed">$${parseFloat(amount).toFixed(2)}</div>
+        </div>
+
+        <div class="details">
+          <div class="detail-row">
+            <span class="detail-key">Status</span>
+            <span class="detail-val" style="color:#FF453A">✗ Failed</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">Reason</span>
+            <span class="detail-val">Payment declined or cancelled</span>
+          </div>
+          ${email ? `
+          <div class="detail-row">
+            <span class="detail-key">Email</span>
+            <span class="detail-val">${email}</span>
+          </div>` : ''}
+          <div class="detail-row">
+            <span class="detail-key">Date</span>
+            <span class="detail-val">${new Date().toLocaleString()}</span>
+          </div>
+        </div>
+
+        <a href="/checkout" class="btn btn-danger">Try Again</a>
+        <a href="/" class="btn btn-secondary">← Start Over</a>
+
+        ${email ? `<div class="email-note">✉️ Failure notice sent to ${email}</div>` : ''}
+      `;
+    }
+
+    // ─── Clear session data after displaying (keep email for retry) ──────────
+    sessionStorage.removeItem('paymentStatus');
+    sessionStorage.removeItem('paymentId');
+    // Keep paymentAmount & email in case user retries
+  </script>
+
+</body>
+</html>
