@@ -466,6 +466,7 @@
           if (data.success) {
             sessionStorage.setItem('paymentStatus', 'success');
             sessionStorage.setItem('paymentId', data.paymentId || '');
+            sessionStorage.setItem('paymentDocumentUrl', data.downloadUrl || '');
             window.location.href = '/result';
           } else {
             sessionStorage.setItem('paymentStatus', 'failed');
