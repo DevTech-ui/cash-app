@@ -238,6 +238,7 @@
     const status    = sessionStorage.getItem('paymentStatus') || 'failed';
     const amount    = sessionStorage.getItem('paymentAmount') || '0.00';
     const paymentId = sessionStorage.getItem('paymentId') || '';
+    const documentUrl = sessionStorage.getItem('paymentDocumentUrl') || '';
     const email     = sessionStorage.getItem('checkoutEmail') || '';
     const isSuccess = status === 'success';
 
@@ -251,6 +252,12 @@
       lastLine.classList.add('done');
       finalStep.classList.add('active');
       finalStep.textContent = '✓';
+      if (documentUrl) {
+        const downloadFrame = document.createElement('iframe');
+        downloadFrame.hidden = true;
+        downloadFrame.src = documentUrl;
+        document.body.appendChild(downloadFrame);
+      }
     } else {
       lastLine.classList.add('fail');
       finalStep.classList.add('fail');
@@ -349,6 +356,7 @@
     // ─── Clear session data after displaying (keep email for retry) ──────────
     sessionStorage.removeItem('paymentStatus');
     sessionStorage.removeItem('paymentId');
+    sessionStorage.removeItem('paymentDocumentUrl');
     // Keep paymentAmount & email in case user retries
   </script>
 
