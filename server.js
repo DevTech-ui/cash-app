@@ -2,16 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
-const crypto = require('crypto');
 const fs = require('fs-extra');
 const nodemailer = require('nodemailer');
-const { Document, Packer, Paragraph, TextRun } = require('docx');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data', 'emails.json');
-const documentDownloads = new Map();
-const DOWNLOAD_TTL_MS = 10 * 60 * 1000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(bodyParser.json());
@@ -155,12 +151,6 @@ app.post('/api/create-payment', async (req, res) => {
     }
 
     const payment = squareData.payment;
-    if (!payment || payment.status !== 'COMPLETED') {
-      return res.status(400).json({
-        success: false,
-        message: `Payment was not completed (status: ${payment?.status || 'unknown'}).`,
-      });
-    }
     console.log(`[Square] Payment success: ${payment.id} — $${amount} from ${email}`);
 
     // ── Save payment record to DB ─────────────────────────────────────────────
@@ -183,19 +173,11 @@ app.post('/api/create-payment', async (req, res) => {
     // ── Send success confirmation email ───────────────────────────────────────
     await sendConfirmationEmail(email, 'success', amount, payment.id);
 
-    const downloadToken = createDocumentDownload({
-      email: email.toLowerCase().trim(),
-      amount: parseFloat(amount).toFixed(2),
-      paymentId: payment.id,
-      paidAt: new Date().toISOString(),
-    });
-
     return res.json({
       success: true,
       paymentId: payment.id,
       status: payment.status,
       amount: amount,
-      downloadUrl: `/api/payment-document/${downloadToken}`,
     });
   } catch (err) {
     console.error('[create-payment] Error:', err);
@@ -207,27 +189,6 @@ app.post('/api/create-payment', async (req, res) => {
  * GET /api/emails  (admin route — view all saved emails)
  * Access: http://localhost:3000/api/emails
  */
-app.get('/api/payment-document/:token', async (req, res) => {
-  const download = documentDownloads.get(req.params.token);
-
-  if (!download || download.expiresAt < Date.now()) {
-    documentDownloads.delete(req.params.token);
-    return res.status(404).send('This download link is invalid or has expired.');
-  }
-
-  try {
-    const buffer = await buildPaymentDocument(download.payment);
-    documentDownloads.delete(req.params.token);
-    res.attachment(`payment-confirmation-${download.payment.paymentId}.docx`);
-    return res
-      .type('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-      .send(buffer);
-  } catch (err) {
-    console.error('[payment-document] Error:', err);
-    return res.status(500).send('Could not generate the payment document.');
-  }
-});
-
 app.get('/api/emails', async (req, res) => {
   try {
     const emails = await fs.readJson(DB_FILE);
@@ -243,38 +204,6 @@ app.get('/api/emails', async (req, res) => {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function createDocumentDownload(payment) {
-  const token = crypto.randomBytes(32).toString('hex');
-  documentDownloads.set(token, {
-    payment,
-    expiresAt: Date.now() + DOWNLOAD_TTL_MS,
-  });
-  return token;
-}
-
-async function buildPaymentDocument({ email, amount, paymentId, paidAt }) {
-  const document = new Document({
-    sections: [{
-      children: [
-        new Paragraph({
-          children: [new TextRun({ text: 'Payment Confirmation', bold: true, size: 32 })],
-        }),
-        new Paragraph(''),
-        new Paragraph('Payment status: Completed'),
-        new Paragraph('Payment method: Cash App Pay'),
-        new Paragraph(`Amount paid: $${amount}`),
-        new Paragraph(`Email: ${email}`),
-        new Paragraph(`Transaction ID: ${paymentId}`),
-        new Paragraph(`Date: ${new Date(paidAt).toLocaleString('en-US')}`),
-        new Paragraph(''),
-        new Paragraph('Thank you for your payment.'),
-      ],
-    }],
-  });
-
-  return Packer.toBuffer(document);
 }
 
 async function sendConfirmationEmail(to, status, amount, paymentId) {
