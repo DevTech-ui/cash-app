@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
-const crypto = require('crypto');
 const fs = require('fs-extra');
 const mongoose = require('mongoose');
 const nodemailer = require('nodemailer');
@@ -13,8 +12,6 @@ const { savePaymentRecord } = require('./payment-db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data', 'emails.json');
-const documentDownloads = new Map();
-const DOWNLOAD_TTL_MS = 10 * 60 * 1000;
 
 const submissionSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, index: true },
@@ -280,12 +277,6 @@ app.post('/api/create-payment', async (req, res) => {
     }
 
     const payment = squareData.payment;
-    if (!payment || payment.status !== 'COMPLETED') {
-      return res.status(400).json({
-        success: false,
-        message: `Payment was not completed (status: ${payment?.status || 'unknown'}).`,
-      });
-    }
     console.log(`[Square] Payment success: ${payment.id} — $${amount} from ${email}`);
 
     // ── Save payment record to DB ─────────────────────────────────────────────
