@@ -875,7 +875,7 @@
 
         processingOverlay.classList.add('show');
         try {
-          const res = await fetch('/api/create-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: tokenResult.token, amount: amount.toFixed(2), email: customerEmail, note: 'Cash App Pay checkout' }) });
+          const res = await fetch('/api/create-payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: tokenResult.token, amount: amount.toFixed(2), email: customerEmail, name: sessionStorage.getItem('checkoutName') || '', note: 'Cash App Pay checkout' }) });
           const data = await res.json();
           processingOverlay.classList.remove('show');
           if (data.success) {

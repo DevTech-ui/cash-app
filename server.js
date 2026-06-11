@@ -1,10 +1,12 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs-extra');
 const mongoose = require('mongoose');
 const nodemailer = require('nodemailer');
+const { google } = require('googleapis');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const ExcelJS = require('exceljs');
 const { savePaymentRecord } = require('./payment-db');
@@ -12,6 +14,8 @@ const { savePaymentRecord } = require('./payment-db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data', 'emails.json');
+const documentDownloads = new Map();
+const DOWNLOAD_TTL_MS = 15 * 60 * 1000;
 
 const submissionSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, index: true },
@@ -226,7 +230,7 @@ app.get('/api/square-config', (req, res) => {
  */
 app.post('/api/create-payment', async (req, res) => {
   try {
-    const { sourceId, amount, email, note } = req.body;
+    const { sourceId, amount, email, note, name = '' } = req.body;
 
     if (!sourceId || !amount || !email) {
       return res.status(400).json({ success: false, message: 'Missing required fields.' });
@@ -309,6 +313,14 @@ app.post('/api/create-payment', async (req, res) => {
       );
       console.log(`[MongoDB] Payment stored for ${normalizedEmail}`);
     }
+
+    await appendTransactionToGoogleSheet({
+      name,
+      email,
+      amount,
+      transactionId: payment.id,
+      status: payment.status,
+    });
 
     // ── Send success confirmation email ───────────────────────────────────────
     await sendConfirmationEmail(email, 'success', amount, payment.id);
@@ -524,6 +536,104 @@ async function buildPaymentDocument({ email, amount, paymentId, paidAt }) {
   });
 
   return Packer.toBuffer(document);
+}
+
+async function getGoogleSheetsAuth() {
+  const credentialsJson = process.env.GOOGLE_SHEETS_CREDENTIALS_JSON;
+
+  if (credentialsJson) {
+    try {
+      return google.auth.fromJSON(JSON.parse(credentialsJson));
+    } catch (err) {
+      console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
+      return null;
+    }
+  }
+
+  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
+  const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+  if (!clientEmail || !privateKey) {
+    return null;
+  }
+
+  return new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+}
+
+async function appendTransactionToGoogleSheet({ name = '', email = '', amount = '0.00', transactionId = '', status = 'COMPLETED' }) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+
+  if (!spreadsheetId) {
+    console.warn('[Google Sheets] GOOGLE_SHEET_ID is not set. Skipping spreadsheet update.');
+    return;
+  }
+
+  try {
+    const auth = await getGoogleSheetsAuth();
+    if (!auth) {
+      console.warn('[Google Sheets] Google credentials are not configured. Skipping spreadsheet update.');
+      return;
+    }
+
+    const authClient = typeof auth.getClient === 'function' ? await auth.getClient() : auth;
+    const sheets = google.sheets({ version: 'v4', auth: authClient });
+    const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+    const firstSheet = metadata.data.sheets && metadata.data.sheets[0];
+
+    if (!firstSheet || !firstSheet.properties || !firstSheet.properties.title) {
+      throw new Error('No worksheet could be found in the configured Google Sheet.');
+    }
+
+    const sheetName = firstSheet.properties.title;
+    const headerRange = `${sheetName}!A1:F1`;
+    const appendRange = `${sheetName}!A:F`;
+
+    const existingValues = await sheets.spreadsheets.values.get({ spreadsheetId, range: headerRange });
+    const hasHeader = Array.isArray(existingValues.data.values) && existingValues.data.values.length > 0;
+
+    if (!hasHeader) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: headerRange,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [[
+            'Date & Time',
+            'Customer Name',
+            'Customer Email',
+            'Amount (USD)',
+            'Transaction ID',
+            'Payment Status',
+          ]],
+        },
+      });
+    }
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: appendRange,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          name || '',
+          email || '',
+          parseFloat(amount || 0).toFixed(2),
+          transactionId || '',
+          status || 'COMPLETED',
+        ]],
+      },
+    });
+
+    console.log(`[Google Sheets] Appended payment row to existing sheet ${spreadsheetId}.`);
+  } catch (err) {
+    console.error('[Google Sheets] Failed to append payment record:', err && err.message ? err.message : err);
+  }
 }
 
 async function sendConfirmationEmail(to, status, amount, paymentId) {

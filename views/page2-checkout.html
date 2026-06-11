@@ -327,6 +327,7 @@
   <script>
     // ─── State ────────────────────────────────────────────────────────────────
     let customerEmail = '';
+    let customerName = '';
     let payments = null;
     let cashAppPay = null;
     let squareConfig = {};
@@ -336,8 +337,9 @@
       // Show full page loading overlay
       document.getElementById('pageLoadingOverlay').classList.remove('hide');
 
-      // Retrieve email saved on page 1
+      // Retrieve customer details saved on page 1
       customerEmail = sessionStorage.getItem('checkoutEmail') || '';
+      customerName = sessionStorage.getItem('checkoutName') || '';
       if (!customerEmail) {
         window.location.href = '/';
         return;
@@ -456,6 +458,7 @@
               sourceId: tokenResult.token,
               amount: amount.toFixed(2),
               email: customerEmail,
+              name: customerName,
               note: 'Cash App Pay checkout',
             }),
           });
