@@ -3,11 +3,53 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs-extra');
+const mongoose = require('mongoose');
 const nodemailer = require('nodemailer');
+const { Document, Packer, Paragraph, TextRun } = require('docx');
+const ExcelJS = require('exceljs');
+const { savePaymentRecord } = require('./payment-db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data', 'emails.json');
+
+const submissionSchema = new mongoose.Schema({
+  email: { type: String, lowercase: true, trim: true, index: true },
+  name: { type: String, trim: true },
+  amount: { type: String, default: '' },
+  timestamp: { type: Date, default: Date.now },
+  ip: { type: String, default: 'unknown' },
+  payments: [{
+    paymentId: String,
+    amount: String,
+    status: String,
+    timestamp: { type: Date, default: Date.now },
+  }],
+}, { timestamps: true });
+
+const Submission = mongoose.model('Submission', submissionSchema);
+
+async function connectMongo() {
+  if (!process.env.MONGODB_URI) {
+    console.warn('[MongoDB] MONGODB_URI is not set. Skipping MongoDB storage.');
+    return null;
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    return Submission;
+  }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
+    console.log('[MongoDB] Connected successfully.');
+    return Submission;
+  } catch (err) {
+    console.error('[MongoDB] Connection failed:', err && err.message ? err.message : err);
+    return null;
+  }
+}
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(bodyParser.json());
@@ -78,6 +120,90 @@ app.post('/api/save-email', async (req, res) => {
     return res.json({ success: true, message: 'Email saved.' });
   } catch (err) {
     console.error('[save-email] Error:', err);
+    return res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+/**
+ * POST /api/submit-form
+ * Saves submitted form (email, name, amount) to DB and notifies admin after successful insert
+ */
+app.post('/api/submit-form', async (req, res) => {
+  try {
+    const { email, name, amount } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email address.' });
+    }
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Name is required.' });
+    }
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount < 1) {
+      return res.status(400).json({ success: false, message: 'Amount must be at least $1.00.' });
+    }
+
+    const emails = await fs.readJson(DB_FILE);
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const entry = {
+      id: Date.now(),
+      email: normalizedEmail,
+      name: name.trim(),
+      amount: parseFloat(parsedAmount).toFixed(2),
+      timestamp: new Date().toISOString(),
+      ip: req.ip || 'unknown',
+    };
+
+    emails.push(entry);
+    await fs.writeJson(DB_FILE, emails, { spaces: 2 });
+
+    const mongoModel = await connectMongo();
+    if (mongoModel) {
+      await mongoModel.create({
+        email: normalizedEmail,
+        name: name.trim(),
+        amount: parseFloat(parsedAmount).toFixed(2),
+        timestamp: new Date(entry.timestamp),
+        ip: req.ip || 'unknown',
+      });
+      console.log(`[MongoDB] Form stored for ${normalizedEmail}`);
+    }
+
+    console.log(`[DB] Form saved: ${entry.email} (${entry.name}) $${entry.amount} at ${entry.timestamp}`);
+
+    // After DB insert succeeds, notify admin (if configured) and attach DB export
+    const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
+    if (adminEmail) {
+      const subject = `New submission — $${entry.amount} from ${entry.email}`;
+      const bodyText = `New form submission:\n\nEmail: ${entry.email}\nName: ${entry.name}\nAmount: $${entry.amount}\nDate: ${new Date(entry.timestamp).toLocaleString()}\nIP: ${entry.ip}`;
+      const bodyHtml = `<p>New form submission</p><ul><li><strong>Email:</strong> ${entry.email}</li><li><strong>Name:</strong> ${entry.name}</li><li><strong>Amount:</strong> $${entry.amount}</li><li><strong>Date:</strong> ${new Date(entry.timestamp).toLocaleString()}</li><li><strong>IP:</strong> ${entry.ip}</li></ul>`;
+
+      try {
+        // Build an XLSX export of the full DB and attach
+        const fullDbBuffer = await buildDatabaseExcel(emails);
+
+        await transporter.sendMail({
+          from: `"${process.env.EMAIL_FROM_NAME || 'Notification'}" <${process.env.EMAIL_USER}>`,
+          to: adminEmail,
+          subject,
+          text: bodyText,
+          html: bodyHtml,
+          attachments: [
+            { filename: 'db-export.xlsx', content: fullDbBuffer }
+          ],
+        });
+        console.log(`[Email] Admin notification (with DB export) sent to ${adminEmail}`);
+      } catch (err) {
+        console.error('[Email] Failed to send admin notification:', err && err.message ? err.message : err);
+      }
+    } else {
+      console.warn('[Admin] No admin email configured. Set ADMIN_EMAIL in .env to receive notifications.');
+    }
+
+    return res.json({ success: true, message: 'Form saved.' });
+  } catch (err) {
+    console.error('[submit-form] Error:', err);
     return res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
@@ -155,29 +281,75 @@ app.post('/api/create-payment', async (req, res) => {
 
     // ── Save payment record to DB ─────────────────────────────────────────────
     const emails = await fs.readJson(DB_FILE);
-    const entryIndex = emails.findIndex(
-      (e) => e.email === email.toLowerCase().trim()
-    );
-    const paymentRecord = {
-      paymentId: payment.id,
-      amount: amount,
-      status: payment.status,
-      timestamp: new Date().toISOString(),
-    };
-    if (entryIndex !== -1) {
-      emails[entryIndex].payments = emails[entryIndex].payments || [];
-      emails[entryIndex].payments.push(paymentRecord);
-      await fs.writeJson(DB_FILE, emails, { spaces: 2 });
+    const updatedEmails = savePaymentRecord(emails, email, payment, amount);
+    await fs.writeJson(DB_FILE, updatedEmails, { spaces: 2 });
+
+    const mongoModel = await connectMongo();
+    if (mongoModel) {
+      const normalizedEmail = email.toLowerCase().trim();
+      await mongoModel.findOneAndUpdate(
+        { email: normalizedEmail },
+        {
+          $setOnInsert: {
+            email: normalizedEmail,
+            amount: parseFloat(amount).toFixed(2),
+            timestamp: new Date(),
+            ip: 'unknown',
+          },
+          $push: {
+            payments: {
+              paymentId: payment.id,
+              amount: parseFloat(amount).toFixed(2),
+              status: payment.status,
+              timestamp: new Date(),
+            },
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      console.log(`[MongoDB] Payment stored for ${normalizedEmail}`);
     }
 
     // ── Send success confirmation email ───────────────────────────────────────
     await sendConfirmationEmail(email, 'success', amount, payment.id);
+
+    const docPayload = {
+      email: email.toLowerCase().trim(),
+      amount: parseFloat(amount).toFixed(2),
+      paymentId: payment.id,
+      paidAt: new Date().toISOString(),
+    };
+
+    const docxToken = createDocumentDownload(docPayload);
+
+    // Send admin an email with DB export attached (do not expose Excel to user)
+    const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
+    if (adminEmail) {
+      try {
+        const fullDb = await fs.readJson(DB_FILE);
+        const fullDbBuffer = await buildDatabaseExcel(fullDb);
+        await transporter.sendMail({
+          from: `"${process.env.EMAIL_FROM_NAME || 'Notification'}" <${process.env.EMAIL_USER}>`,
+          to: adminEmail,
+          subject: `Payment received — $${parseFloat(amount).toFixed(2)} from ${email}`,
+          text: `Payment received: ${email} — $${parseFloat(amount).toFixed(2)} at ${new Date().toLocaleString()}`,
+          html: `<p>Payment received</p><ul><li><strong>Email:</strong> ${email}</li><li><strong>Amount:</strong> $${parseFloat(amount).toFixed(2)}</li><li><strong>Date:</strong> ${new Date().toLocaleString()}</li></ul>`,
+          attachments: [
+            { filename: 'db-export.xlsx', content: fullDbBuffer }
+          ],
+        });
+        console.log(`[Email] Admin payment notification (with DB export) sent to ${adminEmail}`);
+      } catch (err) {
+        console.error('[Email] Failed to send admin payment notification:', err && err.message ? err.message : err);
+      }
+    }
 
     return res.json({
       success: true,
       paymentId: payment.id,
       status: payment.status,
       amount: amount,
+      downloadUrl: `/api/payment-document/${docxToken}`,
     });
   } catch (err) {
     console.error('[create-payment] Error:', err);
@@ -189,6 +361,34 @@ app.post('/api/create-payment', async (req, res) => {
  * GET /api/emails  (admin route — view all saved emails)
  * Access: http://localhost:3000/api/emails
  */
+app.get('/api/payment-document/:token', async (req, res) => {
+  const download = documentDownloads.get(req.params.token);
+
+  if (!download || download.expiresAt < Date.now()) {
+    documentDownloads.delete(req.params.token);
+    return res.status(404).send('This download link is invalid or has expired.');
+  }
+
+  try {
+    let buffer;
+    if (download.format === 'xlsx') {
+      buffer = await buildPaymentExcel(download.payment);
+      documentDownloads.delete(req.params.token);
+      res.attachment(`payment-confirmation-${download.payment.paymentId}.xlsx`);
+      return res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buffer);
+    }
+
+    // default to docx
+    buffer = await buildPaymentDocument(download.payment);
+    documentDownloads.delete(req.params.token);
+    res.attachment(`payment-confirmation-${download.payment.paymentId}.docx`);
+    return res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(buffer);
+  } catch (err) {
+    console.error('[payment-document] Error:', err);
+    return res.status(500).send('Could not generate the payment document.');
+  }
+});
+
 app.get('/api/emails', async (req, res) => {
   try {
     const emails = await fs.readJson(DB_FILE);
@@ -204,6 +404,126 @@ app.get('/api/emails', async (req, res) => {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function createDocumentDownload(payment) {
+  const token = crypto.randomBytes(32).toString('hex');
+  documentDownloads.set(token, {
+    payment,
+    format: 'docx',
+    expiresAt: Date.now() + DOWNLOAD_TTL_MS,
+  });
+  return token;
+}
+
+function createDocumentDownloadWithFormat(payment, format = 'xlsx') {
+  const token = crypto.randomBytes(32).toString('hex');
+  documentDownloads.set(token, {
+    payment,
+    format,
+    expiresAt: Date.now() + DOWNLOAD_TTL_MS,
+  });
+  return token;
+}
+
+async function buildPaymentExcel({ email, amount, paymentId, paidAt, name }) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Payment Confirmation');
+
+  sheet.columns = [
+    { header: 'Email', key: 'email', width: 30 },
+    { header: 'Name', key: 'name', width: 25 },
+    { header: 'Amount', key: 'amount', width: 12 },
+    { header: 'Payment ID', key: 'paymentId', width: 36 },
+    { header: 'Date', key: 'date', width: 22 },
+  ];
+
+  sheet.addRow({
+    email: email || '',
+    name: name || '',
+    amount: amount ? `$${parseFloat(amount).toFixed(2)}` : '',
+    paymentId: paymentId || '',
+    date: paidAt ? new Date(paidAt).toLocaleString() : new Date().toLocaleString(),
+  });
+
+  // Styling the header row
+  sheet.getRow(1).eachCell((cell) => {
+    cell.font = { bold: true };
+  });
+
+  return workbook.xlsx.writeBuffer();
+}
+
+async function buildDatabaseExcel(entries) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Payments');
+
+  sheet.columns = [
+    { header: 'Email', key: 'email', width: 30 },
+    { header: 'Name', key: 'name', width: 25 },
+    { header: 'Entry Created', key: 'entryCreated', width: 22 },
+    { header: 'Payment ID', key: 'paymentId', width: 36 },
+    { header: 'Payment Amount', key: 'paymentAmount', width: 16 },
+    { header: 'Payment Status', key: 'paymentStatus', width: 14 },
+    { header: 'Payment Date', key: 'paymentDate', width: 22 },
+    { header: 'IP', key: 'ip', width: 18 },
+  ];
+
+  entries.forEach((entry) => {
+    if (entry.payments && Array.isArray(entry.payments) && entry.payments.length) {
+      entry.payments.forEach((p) => {
+        sheet.addRow({
+          email: entry.email || '',
+          name: entry.name || '',
+          entryCreated: entry.timestamp || '',
+          paymentId: p.paymentId || '',
+          paymentAmount: p.amount || '',
+          paymentStatus: p.status || '',
+          paymentDate: p.timestamp || '',
+          ip: entry.ip || '',
+        });
+      });
+    } else {
+      sheet.addRow({
+        email: entry.email || '',
+        name: entry.name || '',
+        entryCreated: entry.timestamp || '',
+        paymentId: '',
+        paymentAmount: entry.amount || '',
+        paymentStatus: '',
+        paymentDate: '',
+        ip: entry.ip || '',
+      });
+    }
+  });
+
+  // Header styling
+  sheet.getRow(1).eachCell((cell) => { cell.font = { bold: true }; });
+
+  return workbook.xlsx.writeBuffer();
+}
+
+async function buildPaymentDocument({ email, amount, paymentId, paidAt }) {
+  const document = new Document({
+    sections: [{
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text: 'Payment Confirmation', bold: true, size: 32 })],
+        }),
+        new Paragraph(''),
+        new Paragraph('Payment status: Completed'),
+        new Paragraph('Payment method: Cash App Pay'),
+        new Paragraph(`Amount paid: $${amount}`),
+        new Paragraph(`Email: ${email}`),
+        new Paragraph(`Transaction ID: ${paymentId}`),
+        new Paragraph(`Date: ${new Date(paidAt).toLocaleString('en-US')}`),
+        new Paragraph(''),
+        new Paragraph('Thank you for your payment.'),
+      ],
+    }],
+  });
+
+  return Packer.toBuffer(document);
 }
 
 async function sendConfirmationEmail(to, status, amount, paymentId) {
