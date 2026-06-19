@@ -314,6 +314,14 @@ app.post('/api/create-payment', async (req, res) => {
       console.log(`[MongoDB] Payment stored for ${normalizedEmail}`);
     }
 
+    console.log('[Google Sheets] Calling appendTransactionToGoogleSheet for payment.', {
+      name,
+      email,
+      amount,
+      transactionId: payment.id,
+      status: payment.status,
+    });
+
     await appendTransactionToGoogleSheet({
       name,
       email,
@@ -539,37 +547,54 @@ async function buildPaymentDocument({ email, amount, paymentId, paidAt }) {
 }
 
 async function getGoogleSheetsAuth() {
-  const credentialsJson = process.env.GOOGLE_SHEETS_CREDENTIALS_JSON;
+  const authConfig = {
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  };
 
-  if (credentialsJson) {
+  let hasCredentials = false;
+
+  if (process.env.GOOGLE_SHEETS_CREDENTIALS_JSON) {
     try {
-      const credentials = typeof credentialsJson === 'string'
-        ? JSON.parse(credentialsJson)
-        : credentialsJson;
+      const credentials = typeof process.env.GOOGLE_SHEETS_CREDENTIALS_JSON === 'string'
+        ? JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS_JSON)
+        : process.env.GOOGLE_SHEETS_CREDENTIALS_JSON;
 
-      const auth = google.auth.fromJSON(credentials);
-      auth.scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+      if (credentials.private_key) {
+        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+      }
+
+      authConfig.credentials = credentials;
+      hasCredentials = true;
       console.log('[Google Sheets] Using GOOGLE_SHEETS_CREDENTIALS_JSON for auth.');
-      return auth;
     } catch (err) {
       console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
-      return null;
     }
   }
 
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
-  const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  if (!hasCredentials) {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
+    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-  if (!clientEmail || !privateKey) {
-    return null;
+    if (!clientEmail || !privateKey) {
+      return null;
+    }
+
+    authConfig.credentials = {
+      client_email: clientEmail,
+      private_key: privateKey,
+      type: 'service_account',
+    };
+    hasCredentials = true;
+    console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
   }
 
-  console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
-  return new google.auth.JWT({
-    email: clientEmail,
-    key: privateKey,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
+  try {
+    const googleAuth = new google.auth.GoogleAuth(authConfig);
+    return await googleAuth.getClient();
+  } catch (err) {
+    console.error('[Google Sheets] Failed to create Google auth client:', err && err.message ? err.message : err);
+    return null;
+  }
 }
 
 async function appendTransactionToGoogleSheet({ name = '', email = '', amount = '0.00', transactionId = '', status = 'COMPLETED' }) {
@@ -596,12 +621,8 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       return;
     }
 
-    const authClient = typeof auth.getClient === 'function'
-      ? await auth.getClient()
-      : auth;
-
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
-    const metadata = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(title))' });
+    const sheets = google.sheets({ version: 'v4', auth });
+    const metadata = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
     const firstSheet = metadata.data.sheets && metadata.data.sheets[0];
 
     if (!firstSheet || !firstSheet.properties || !firstSheet.properties.title) {
@@ -609,6 +630,7 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
     }
 
     const sheetName = firstSheet.properties.title;
+    const sheetId = firstSheet.properties.sheetId;
     const headerRange = `${sheetName}!A1:F1`;
     const appendRange = `${sheetName}!A:F`;
 
@@ -633,14 +655,15 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       });
     }
 
-    await sheets.spreadsheets.values.append({
+    const appendedAt = new Date();
+    const appendResponse = await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: appendRange,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
         values: [[
-          new Date().toISOString(),
+          appendedAt.toISOString(),
           name || '',
           email || '',
           parseFloat(amount || 0).toFixed(2),
@@ -650,10 +673,76 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       },
     });
 
+    await highlightGoogleSheetRowByDate({
+      sheets,
+      spreadsheetId,
+      sheetId,
+      updatedRange: appendResponse.data && appendResponse.data.updates && appendResponse.data.updates.updatedRange,
+      date: appendedAt,
+    });
+
     console.log(`[Google Sheets] Appended payment row to sheet '${sheetName}' (${spreadsheetId}).`);
   } catch (err) {
-    console.error('[Google Sheets] Failed to append payment record:', err && err.message ? err.message : err);
+    console.error('[Google Sheets] Failed to append payment record:', err);
+    if (err && err.response && err.response.data) {
+      console.error('[Google Sheets] API response data:', err.response.data);
+    }
   }
+}
+
+function getDailyHighlightColor(date) {
+  const palette = [
+    { red: 0.9, green: 0.96, blue: 1 },
+    { red: 0.91, green: 0.98, blue: 0.91 },
+    { red: 1, green: 0.96, blue: 0.86 },
+    { red: 0.96, green: 0.92, blue: 1 },
+    { red: 1, green: 0.93, blue: 0.91 },
+    { red: 0.9, green: 0.98, blue: 0.97 },
+    { red: 0.96, green: 0.96, blue: 0.96 },
+  ];
+  const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = Math.floor(dayStart.getTime() / 86400000);
+  return palette[dayNumber % palette.length];
+}
+
+function getStartRowIndexFromRange(updatedRange) {
+  const match = typeof updatedRange === 'string' ? updatedRange.match(/![A-Z]+(\d+):/i) : null;
+  if (!match) return null;
+  return Number(match[1]) - 1;
+}
+
+async function highlightGoogleSheetRowByDate({ sheets, spreadsheetId, sheetId, updatedRange, date }) {
+  const startRowIndex = getStartRowIndexFromRange(updatedRange);
+
+  if (startRowIndex === null || Number.isNaN(startRowIndex)) {
+    console.warn('[Google Sheets] Could not determine appended row for daily highlight.', { updatedRange });
+    return;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex,
+              endRowIndex: startRowIndex + 1,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: getDailyHighlightColor(date),
+              },
+            },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        },
+      ],
+    },
+  });
 }
 
 async function sendConfirmationEmail(to, status, amount, paymentId) {
