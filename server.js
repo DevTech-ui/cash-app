@@ -569,6 +569,20 @@ async function getGoogleSheetsAuth() {
     } catch (err) {
       console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
     }
+  } else {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
+    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+    if (!clientEmail || !privateKey) {
+      return null;
+    }
+
+    authConfig.credentials = {
+      client_email: clientEmail,
+      private_key: privateKey,
+      type: 'service_account',
+    };
+    console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
   }
 
   if (!hasCredentials) {
