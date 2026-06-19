@@ -543,7 +543,13 @@ async function getGoogleSheetsAuth() {
 
   if (credentialsJson) {
     try {
-      return google.auth.fromJSON(JSON.parse(credentialsJson));
+      const credentials = typeof credentialsJson === 'string'
+        ? JSON.parse(credentialsJson)
+        : credentialsJson;
+
+      const auth = google.auth.fromJSON(credentials);
+      auth.scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+      return auth;
     } catch (err) {
       console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
       return null;
@@ -579,9 +585,8 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       return;
     }
 
-    const authClient = typeof auth.getClient === 'function' ? await auth.getClient() : auth;
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
-    const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheets = google.sheets({ version: 'v4', auth });
+    const metadata = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(title))' });
     const firstSheet = metadata.data.sheets && metadata.data.sheets[0];
 
     if (!firstSheet || !firstSheet.properties || !firstSheet.properties.title) {
@@ -630,7 +635,7 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       },
     });
 
-    console.log(`[Google Sheets] Appended payment row to existing sheet ${spreadsheetId}.`);
+    console.log(`[Google Sheets] Appended payment row to sheet '${sheetName}' (${spreadsheetId}).`);
   } catch (err) {
     console.error('[Google Sheets] Failed to append payment record:', err && err.message ? err.message : err);
   }
