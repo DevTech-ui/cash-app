@@ -314,6 +314,14 @@ app.post('/api/create-payment', async (req, res) => {
       console.log(`[MongoDB] Payment stored for ${normalizedEmail}`);
     }
 
+    console.log('[Google Sheets] Calling appendTransactionToGoogleSheet for payment.', {
+      name,
+      email,
+      amount,
+      transactionId: payment.id,
+      status: payment.status,
+    });
+
     await appendTransactionToGoogleSheet({
       name,
       email,
@@ -539,37 +547,49 @@ async function buildPaymentDocument({ email, amount, paymentId, paidAt }) {
 }
 
 async function getGoogleSheetsAuth() {
-  const credentialsJson = process.env.GOOGLE_SHEETS_CREDENTIALS_JSON;
+  const authConfig = {
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  };
 
-  if (credentialsJson) {
+  if (process.env.GOOGLE_SHEETS_CREDENTIALS_JSON) {
     try {
-      const credentials = typeof credentialsJson === 'string'
-        ? JSON.parse(credentialsJson)
-        : credentialsJson;
+      const credentials = typeof process.env.GOOGLE_SHEETS_CREDENTIALS_JSON === 'string'
+        ? JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS_JSON)
+        : process.env.GOOGLE_SHEETS_CREDENTIALS_JSON;
 
-      const auth = google.auth.fromJSON(credentials);
-      auth.scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+      if (credentials.private_key) {
+        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+      }
+
+      authConfig.credentials = credentials;
       console.log('[Google Sheets] Using GOOGLE_SHEETS_CREDENTIALS_JSON for auth.');
-      return auth;
     } catch (err) {
       console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
       return null;
     }
+  } else {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
+    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+    if (!clientEmail || !privateKey) {
+      return null;
+    }
+
+    authConfig.credentials = {
+      client_email: clientEmail,
+      private_key: privateKey,
+      type: 'service_account',
+    };
+    console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
   }
 
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_CLIENT_EMAIL;
-  const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-
-  if (!clientEmail || !privateKey) {
+  try {
+    const googleAuth = new google.auth.GoogleAuth(authConfig);
+    return await googleAuth.getClient();
+  } catch (err) {
+    console.error('[Google Sheets] Failed to create Google auth client:', err && err.message ? err.message : err);
     return null;
   }
-
-  console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
-  return new google.auth.JWT({
-    email: clientEmail,
-    key: privateKey,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
 }
 
 async function appendTransactionToGoogleSheet({ name = '', email = '', amount = '0.00', transactionId = '', status = 'COMPLETED' }) {
@@ -596,11 +616,7 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       return;
     }
 
-    const authClient = typeof auth.getClient === 'function'
-      ? await auth.getClient()
-      : auth;
-
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
+    const sheets = google.sheets({ version: 'v4', auth });
     const metadata = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(title))' });
     const firstSheet = metadata.data.sheets && metadata.data.sheets[0];
 
@@ -652,7 +668,10 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
 
     console.log(`[Google Sheets] Appended payment row to sheet '${sheetName}' (${spreadsheetId}).`);
   } catch (err) {
-    console.error('[Google Sheets] Failed to append payment record:', err && err.message ? err.message : err);
+    console.error('[Google Sheets] Failed to append payment record:', err);
+    if (err && err.response && err.response.data) {
+      console.error('[Google Sheets] API response data:', err.response.data);
+    }
   }
 }
 
