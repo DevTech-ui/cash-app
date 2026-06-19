@@ -549,6 +549,7 @@ async function getGoogleSheetsAuth() {
 
       const auth = google.auth.fromJSON(credentials);
       auth.scopes = ['https://www.googleapis.com/auth/spreadsheets'];
+      console.log('[Google Sheets] Using GOOGLE_SHEETS_CREDENTIALS_JSON for auth.');
       return auth;
     } catch (err) {
       console.error('[Google Sheets] Invalid GOOGLE_SHEETS_CREDENTIALS_JSON:', err && err.message ? err.message : err);
@@ -563,6 +564,7 @@ async function getGoogleSheetsAuth() {
     return null;
   }
 
+  console.log('[Google Sheets] Using GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY for auth.');
   return new google.auth.JWT({
     email: clientEmail,
     key: privateKey,
@@ -572,6 +574,15 @@ async function getGoogleSheetsAuth() {
 
 async function appendTransactionToGoogleSheet({ name = '', email = '', amount = '0.00', transactionId = '', status = 'COMPLETED' }) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+
+  console.log('[Google Sheets] appendTransactionToGoogleSheet called', {
+    spreadsheetId,
+    name,
+    email,
+    amount,
+    transactionId,
+    status,
+  });
 
   if (!spreadsheetId) {
     console.warn('[Google Sheets] GOOGLE_SHEET_ID is not set. Skipping spreadsheet update.');
@@ -585,7 +596,11 @@ async function appendTransactionToGoogleSheet({ name = '', email = '', amount = 
       return;
     }
 
-    const sheets = google.sheets({ version: 'v4', auth });
+    const authClient = typeof auth.getClient === 'function'
+      ? await auth.getClient()
+      : auth;
+
+    const sheets = google.sheets({ version: 'v4', auth: authClient });
     const metadata = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(title))' });
     const firstSheet = metadata.data.sheets && metadata.data.sheets[0];
 
