@@ -636,12 +636,12 @@
             <!-- <span style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#d1fae5;margin-bottom:8px;">Amount (USD)</span> -->
             <div class="amount-wrap">
               <span class="amount-prefix">$</span>
-              <input class="input amount" id="amount" name="amount" type="number" step="0.01" min="1"
-                placeholder="10.00" required
+              <input class="input amount" id="amount" name="amount" type="number" step="0.01" min="20"
+                placeholder="20.00" required
                 style="background:#fff;border-color:rgba(255,255,255,0.12);color:#111827;" />
             </div>
             <div class="quick-amounts" style="margin-top:8px;">
-              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='10.00'">$10</button>
+              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='20.00'">$20</button>
               <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='25.00'">$25</button>
               <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='50.00'">$50</button>
               <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='100.00'">$100</button>
@@ -656,7 +656,7 @@
 
         <section class="form-panel">
           <div class="section-label">Payment Section</div>
-          <h1 class="pay-heading">Pay with Cash App</h1>
+          <h1 class="pay-heading">Pay with TapTapUp</h1>
           <!-- <p class="subtitle">Enter your details below, then continue to the Cash App Pay step. The payment flow and submission logic remain unchanged.</p> -->
 
           <form id="checkoutForm" class="field-grid">
@@ -695,11 +695,11 @@
               </div>
             </div>
 
-            <button id="saveBtn" class="btn" type="submit">Save & Show Cash App Pay</button>
+            <button id="saveBtn" class="btn" type="submit">Continue to TapTapUp</button>
           </form>
 
           <div id="cash-app-pay" style="margin-top:8px"></div>
-          <p class="payment-note">QR code and direct Cash App Pay checkout render automatically here on desktop and mobile.</p>
+          <p class="payment-note">You will be redirected to TapTapUp to complete the payment securely.</p>
           <div id="status" class="status error"></div>
 
           <section id="successPanel" class="success-panel" aria-live="polite">
@@ -746,9 +746,6 @@
 
   <script>
     // State
-    let payments = null;
-    let cashAppPay = null;
-    let squareConfig = {};
     let customerEmail = '';
 
     const form = document.getElementById('checkoutForm');
@@ -763,6 +760,20 @@
 
     function showError(msg) { statusEl.textContent = msg; statusEl.classList.add('show'); statusEl.classList.add('error') }
     function clearError() { statusEl.classList.remove('show'); statusEl.classList.remove('error') }
+    async function postJsonWithRetry(url, body, retries = 1) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return await response.json();
+      } catch (err) {
+        if (retries <= 0) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        return postJsonWithRetry(url, body, retries - 1);
+      }
+    }
     function showSuccess(summary) {
       successMessageEl.textContent = summary.message || 'Your payment has been completed successfully on this page.';
       txIdEl.textContent = summary.paymentId || '—';
@@ -783,7 +794,7 @@
 
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showError('Please enter a valid email address.');
       if (!name) return showError('Please enter your full name.');
-      if (isNaN(parsed) || parsed < 1) return showError('Enter an amount of at least $1.00.');
+      if (isNaN(parsed) || parsed < 20) return showError('Enter an amount of at least $20.00.');
 
       // Disable button
       const btn = document.getElementById('saveBtn');
@@ -791,11 +802,7 @@
       hideSuccess();
 
       try {
-        const res = await fetch('/api/submit-form', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, name, amount: parsed.toFixed(2) })
-        });
-        const json = await res.json();
+        const json = await postJsonWithRetry('/api/submit-form', { email, name, amount: parsed.toFixed(2) });
         if (!json.success) {
           showError(json.message || 'Could not save.');
           btn.disabled = false; btn.textContent = 'Save & Show Cash App Pay';
@@ -808,22 +815,26 @@
         sessionStorage.setItem('checkoutName', name);
         sessionStorage.setItem('paymentAmount', parsed.toFixed(2));
 
-        btn.textContent = 'Loading payment...';
+        btn.textContent = 'Opening TapTapUp...';
+        processingOverlay.classList.add('show');
 
-        // Fetch square config and load SDK then init
-        const cfgRes = await fetch('/api/square-config');
-        squareConfig = await cfgRes.json();
-        const sdkUrl = squareConfig.environment === 'production' ? 'https://web.squarecdn.com/v1/square.js' : 'https://sandbox.web.squarecdn.com/v1/square.js';
+        const paymentJson = await postJsonWithRetry('/api/create-payment', { amount: parsed.toFixed(2), email, name });
+        if (!paymentJson.success || !paymentJson.redirectUrl) {
+          processingOverlay.classList.remove('show');
+          showError(paymentJson.message || 'Could not start payment.');
+          btn.disabled = false;
+          btn.textContent = 'Continue to TapTapUp';
+          return;
+        }
 
-        await loadScript(sdkUrl);
-        await initSquare();
-
-        btn.style.display = 'none';
+        sessionStorage.setItem('merchantReference', paymentJson.merchantReference || '');
+        window.location.href = paymentJson.redirectUrl;
       } catch (err) {
         console.error(err);
+        processingOverlay.classList.remove('show');
         showError('Network or server error. Please try again.');
         document.getElementById('saveBtn').disabled = false;
-        document.getElementById('saveBtn').textContent = 'Save & Show Cash App Pay';
+        document.getElementById('saveBtn').textContent = 'Continue to TapTapUp';
       }
     });
 
@@ -861,10 +872,9 @@
     resetBtn.addEventListener('click', () => {
       hideSuccess();
       document.getElementById('saveBtn').disabled = false;
-      document.getElementById('saveBtn').textContent = 'Save & Show Cash App Pay';
+      document.getElementById('saveBtn').textContent = 'Continue to TapTapUp';
       document.getElementById('saveBtn').style.display = 'block';
       document.getElementById('cash-app-pay').innerHTML = '';
-      mountCashAppPay();
     });
 
     async function handleToken(event) {

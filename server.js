@@ -15,7 +15,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'data', 'emails.json');
 const documentDownloads = new Map();
+const taptapupPayments = new Map();
 const DOWNLOAD_TTL_MS = 15 * 60 * 1000;
+const MIN_PAYMENT_AMOUNT = Number(process.env.TAPTAPUP_MIN_AMOUNT || 20);
 
 const submissionSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, index: true },
@@ -86,7 +88,7 @@ app.get('/', (req, res) => {
 
 // Page 2 — Square checkout
 app.get('/checkout', (req, res) => {
-  res.sendFile(path.join(__dirname, 'views', 'page2-checkout.html'));
+  res.sendFile(path.join(__dirname, 'views', 'page1-email.html'));
 });
 
 // Page 3 — Result (success or failure)
@@ -143,8 +145,8 @@ app.post('/api/submit-form', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Name is required.' });
     }
     const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount < 1) {
-      return res.status(400).json({ success: false, message: 'Amount must be at least $1.00.' });
+    if (isNaN(parsedAmount) || parsedAmount < MIN_PAYMENT_AMOUNT) {
+      return res.status(400).json({ success: false, message: `Amount must be at least $${MIN_PAYMENT_AMOUNT.toFixed(2)}.` });
     }
 
     const emails = await fs.readJson(DB_FILE);
@@ -175,6 +177,7 @@ app.post('/api/submit-form', async (req, res) => {
     }
 
     console.log(`[DB] Form saved: ${entry.email} (${entry.name}) $${entry.amount} at ${entry.timestamp}`);
+    return res.json({ success: true, message: 'Form saved.' });
 
     // After DB insert succeeds, notify admin (if configured) and attach DB export
     const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
@@ -230,18 +233,63 @@ app.get('/api/square-config', (req, res) => {
  */
 app.post('/api/create-payment', async (req, res) => {
   try {
-    const { sourceId, amount, email, note, name = '' } = req.body;
+    const { amount, email, name = '' } = req.body;
 
-    if (!sourceId || !amount || !email) {
+    if (!amount || !email) {
       return res.status(400).json({ success: false, message: 'Missing required fields.' });
     }
-
-    const amountInCents = Math.round(parseFloat(amount) * 100);
-    if (amountInCents < 100) {
-      return res.status(400).json({ success: false, message: 'Minimum amount is $1.00.' });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email address.' });
     }
 
-    // ── Call Square Payments API ──────────────────────────────────────────────
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount < MIN_PAYMENT_AMOUNT) {
+      return res.status(400).json({ success: false, message: `Minimum amount is $${MIN_PAYMENT_AMOUNT.toFixed(2)}.` });
+    }
+
+    // Start a TapTapUp hosted payment session.
+    const merchantReference = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const baseUrl = getBaseUrl(req);
+    const taptapupData = await callTapTapUp('/initiate-payment', 'POST', {
+      product_id: getTapTapUpProductId(),
+      amount: Number(parsedAmount.toFixed(2)),
+      email: email.toLowerCase().trim(),
+      merchant_reference: merchantReference,
+      return_url: `${baseUrl}/result?ref=${encodeURIComponent(merchantReference)}`,
+      webhook_url: `${baseUrl}/api/taptapup-webhook`,
+    });
+    const paymentSession = unwrapTapTapUpData(taptapupData);
+
+    if (!taptapupData.success || !paymentSession.redirect_url || !paymentSession.token) {
+      console.error('[TapTapUp] Payment initiation failed:', taptapupData);
+      await sendConfirmationEmail(email, 'failed', parsedAmount.toFixed(2), null);
+      return res.status(400).json({
+        success: false,
+        message: taptapupData.message || 'Could not start TapTapUp payment.',
+        details: taptapupData,
+      });
+    }
+
+    taptapupPayments.set(merchantReference, {
+      token: paymentSession.token,
+      name,
+      email: email.toLowerCase().trim(),
+      amount: parsedAmount.toFixed(2),
+      merchantReference,
+      createdAt: Date.now(),
+    });
+
+    console.log(`[TapTapUp] Payment initiated: ${merchantReference} - $${parsedAmount.toFixed(2)} from ${email}`);
+
+    return res.json({
+      success: true,
+      redirectUrl: paymentSession.redirect_url,
+      merchantReference,
+      expiresIn: paymentSession.expires_in,
+      requestedAmount: paymentSession.requested_amount,
+      finalAmount: paymentSession.final_amount,
+    });
+
     const squareBaseUrl =
       process.env.SQUARE_ENVIRONMENT === 'production'
         ? 'https://connect.squareup.com'
@@ -373,7 +421,7 @@ app.post('/api/create-payment', async (req, res) => {
     });
   } catch (err) {
     console.error('[create-payment] Error:', err);
-    return res.status(500).json({ success: false, message: 'Server error processing payment.' });
+    return res.status(500).json({ success: false, message: err.message || 'Server error processing payment.' });
   }
 });
 
@@ -381,6 +429,81 @@ app.post('/api/create-payment', async (req, res) => {
  * GET /api/emails  (admin route — view all saved emails)
  * Access: http://localhost:3000/api/emails
  */
+app.get('/api/payment-status', async (req, res) => {
+  try {
+    const merchantReference = String(req.query.ref || '').trim();
+    if (!merchantReference) {
+      return res.status(400).json({ success: false, message: 'Missing payment reference.' });
+    }
+
+    const pendingPayment = taptapupPayments.get(merchantReference);
+    if (!pendingPayment) {
+      return res.status(404).json({ success: false, message: 'Payment reference was not found or has expired.' });
+    }
+
+    const statusData = await callTapTapUp(`/status/${encodeURIComponent(pendingPayment.token)}`, 'GET');
+    const paymentStatus = unwrapTapTapUpData(statusData);
+    if (!statusData.success) {
+      return res.status(400).json({ success: false, message: statusData.message || 'Could not verify payment status.', details: statusData });
+    }
+
+    if (paymentStatus.status === 'completed' && !pendingPayment.completed) {
+      const result = await finalizeTapTapUpPayment({
+        ...pendingPayment,
+        orderId: paymentStatus.order_id,
+        status: paymentStatus.status,
+      });
+      pendingPayment.completed = true;
+      pendingPayment.orderId = paymentStatus.order_id;
+      pendingPayment.downloadUrl = result.downloadUrl;
+    }
+
+    return res.json({
+      success: true,
+      status: paymentStatus.status,
+      paymentId: String(paymentStatus.order_id || pendingPayment.orderId || merchantReference),
+      amount: pendingPayment.amount,
+      email: pendingPayment.email,
+      downloadUrl: pendingPayment.downloadUrl || '',
+    });
+  } catch (err) {
+    console.error('[payment-status] Error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Could not verify payment status.' });
+  }
+});
+
+app.post('/api/taptapup-webhook', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const merchantReference = payload.merchant_reference || req.get('X-Merchant-Reference');
+
+    if (payload.event !== 'payment.completed' || payload.status !== 'completed') {
+      return res.status(202).json({ success: true });
+    }
+
+    const pendingPayment = merchantReference ? taptapupPayments.get(merchantReference) : null;
+    const result = await finalizeTapTapUpPayment({
+      merchantReference,
+      name: pendingPayment?.name || '',
+      email: payload.email || pendingPayment?.email || '',
+      amount: String(payload.amount || pendingPayment?.amount || '0.00'),
+      orderId: payload.order_id || payload.order_number || merchantReference,
+      status: payload.status,
+    });
+
+    if (pendingPayment) {
+      pendingPayment.completed = true;
+      pendingPayment.orderId = payload.order_id || payload.order_number;
+      pendingPayment.downloadUrl = result.downloadUrl;
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[taptapup-webhook] Error:', err);
+    return res.status(500).json({ success: false });
+  }
+});
+
 app.get('/api/payment-document/:token', async (req, res) => {
   const download = documentDownloads.get(req.params.token);
 
@@ -424,6 +547,151 @@ app.get('/api/emails', async (req, res) => {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function getBaseUrl(req) {
+  return (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+}
+
+function getTapTapUpProductId() {
+  const productId = Number(process.env.TAPTAPUP_PRODUCT_ID);
+  if (!Number.isInteger(productId) || productId <= 0) {
+    throw new Error('TAPTAPUP_PRODUCT_ID must be set to your TapTapUp product ID.');
+  }
+  return productId;
+}
+
+function getTapTapUpConfig() {
+  const merchantId = process.env.TAPTAPUP_MERCHANT_ID;
+  const sharedSecret = process.env.TAPTAPUP_SHARED_SECRET;
+
+  if (!merchantId || !sharedSecret) {
+    throw new Error('TapTapUp credentials are missing. Set TAPTAPUP_MERCHANT_ID and TAPTAPUP_SHARED_SECRET.');
+  }
+
+  return {
+    merchantId,
+    sharedSecret,
+    baseUrl: (process.env.TAPTAPUP_API_BASE_URL || 'https://taptapup.xyz/api/v1').replace(/\/$/, ''),
+  };
+}
+
+async function callTapTapUp(endpoint, method = 'GET', payload) {
+  const { merchantId, sharedSecret, baseUrl } = getTapTapUpConfig();
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const rawBody = payload ? JSON.stringify(payload) : '';
+  const signature = crypto
+    .createHmac('sha256', sharedSecret)
+    .update(`${timestamp}${rawBody}`)
+    .digest('hex');
+
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Merchant-ID': merchantId,
+      'X-Timestamp': timestamp,
+      'X-Signature': signature,
+    },
+    body: payload ? rawBody : undefined,
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    data = { success: false, message: 'TapTapUp returned a non-JSON response.' };
+  }
+
+  if (!response.ok && data.success !== false) {
+    data.success = false;
+    data.message = data.message || `TapTapUp request failed with HTTP ${response.status}.`;
+  }
+
+  return data;
+}
+
+function unwrapTapTapUpData(response) {
+  return response && typeof response.data === 'object' && response.data !== null
+    ? response.data
+    : response || {};
+}
+
+async function finalizeTapTapUpPayment({ name = '', email = '', amount = '0.00', orderId = '', status = 'completed' }) {
+  const normalizedEmail = email.toLowerCase().trim();
+  const paymentId = String(orderId || `taptapup-${Date.now()}`);
+  const paymentStatus = String(status || 'completed').toUpperCase();
+  const payment = { id: paymentId, status: paymentStatus };
+
+  const emails = await fs.readJson(DB_FILE);
+  const updatedEmails = savePaymentRecord(emails, normalizedEmail, payment, amount);
+  await fs.writeJson(DB_FILE, updatedEmails, { spaces: 2 });
+
+  const mongoModel = await connectMongo();
+  if (mongoModel) {
+    await mongoModel.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        $setOnInsert: {
+          email: normalizedEmail,
+          amount: parseFloat(amount).toFixed(2),
+          timestamp: new Date(),
+          ip: 'unknown',
+        },
+        $push: {
+          payments: {
+            paymentId,
+            amount: parseFloat(amount).toFixed(2),
+            status: paymentStatus,
+            timestamp: new Date(),
+          },
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  await appendTransactionToGoogleSheet({
+    name,
+    email: normalizedEmail,
+    amount,
+    transactionId: paymentId,
+    status: paymentStatus,
+  });
+
+  await sendConfirmationEmail(normalizedEmail, 'success', amount, paymentId);
+
+  const downloadUrl = `/api/payment-document/${createDocumentDownload({
+    email: normalizedEmail,
+    amount: parseFloat(amount).toFixed(2),
+    paymentId,
+    paidAt: new Date().toISOString(),
+  })}`;
+
+  await sendAdminPaymentNotification({ email: normalizedEmail, amount, paymentId });
+  return { paymentId, downloadUrl };
+}
+
+async function sendAdminPaymentNotification({ email, amount, paymentId }) {
+  const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
+  if (!adminEmail) return;
+
+  try {
+    const fullDb = await fs.readJson(DB_FILE);
+    const fullDbBuffer = await buildDatabaseExcel(fullDb);
+    await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME || 'Notification'}" <${process.env.EMAIL_USER}>`,
+      to: adminEmail,
+      subject: `Payment received - $${parseFloat(amount).toFixed(2)} from ${email}`,
+      text: `Payment received: ${email} - $${parseFloat(amount).toFixed(2)} at ${new Date().toLocaleString()}`,
+      html: `<p>Payment received</p><ul><li><strong>Email:</strong> ${email}</li><li><strong>Amount:</strong> $${parseFloat(amount).toFixed(2)}</li><li><strong>Transaction ID:</strong> ${paymentId}</li><li><strong>Date:</strong> ${new Date().toLocaleString()}</li></ul>`,
+      attachments: [
+        { filename: 'db-export.xlsx', content: fullDbBuffer }
+      ],
+    });
+  } catch (err) {
+    console.error('[Email] Failed to send admin payment notification:', err && err.message ? err.message : err);
+  }
 }
 
 function createDocumentDownload(payment) {
