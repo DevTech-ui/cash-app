@@ -1,5 +1,6 @@
 require('dotenv').config();
 const crypto = require('crypto');
+const dns = require('dns');
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -10,6 +11,8 @@ const { google } = require('googleapis');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const ExcelJS = require('exceljs');
 const { savePaymentRecord } = require('./payment-db');
+
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -593,16 +596,19 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
     .digest('hex');
 
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.TAPTAPUP_TIMEOUT_MS || 20000));
   try {
     response = await fetch(`${baseUrl}${endpoint}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Merchant-ID': merchantId,
-      'X-Timestamp': timestamp,
-      'X-Signature': signature,
-    },
-    body: payload ? rawBody : undefined,
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Merchant-ID': merchantId,
+        'X-Timestamp': timestamp,
+        'X-Signature': signature,
+      },
+      body: payload ? rawBody : undefined,
+      signal: controller.signal,
     });
   } catch (err) {
     console.error('[TapTapUp] API request failed:', {
@@ -610,7 +616,9 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
       code: err?.cause?.code || err?.code,
       message: err?.message,
     });
-    throw new Error(`Could not reach TapTapUp API at ${baseUrl}. Check TAPTAPUP_API_BASE_URL and Render outbound connectivity.`);
+    throw new Error(`Could not reach TapTapUp API at ${baseUrl}. Check TAPTAPUP_API_BASE_URL, Render outbound connectivity, and TapTapUp IP allowlisting.`);
+  } finally {
+    clearTimeout(timeout);
   }
 
   let data;
