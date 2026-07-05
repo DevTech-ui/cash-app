@@ -235,6 +235,33 @@
   </div>
 
   <script>
+    (async () => {
+    const returnRef = new URLSearchParams(window.location.search).get('ref') || sessionStorage.getItem('merchantReference') || '';
+    if (returnRef) {
+      document.getElementById('resultCard').innerHTML = `
+        <div class="result-icon success">...</div>
+        <h1>Verifying Payment</h1>
+        <p class="result-subtitle">Please wait while we confirm your TapTapUp payment.</p>
+      `;
+
+      try {
+        const verifyRes = await fetch(`/api/payment-status?ref=${encodeURIComponent(returnRef)}`);
+        const verifyJson = await verifyRes.json();
+        if (verifyJson.success && verifyJson.status === 'completed') {
+          sessionStorage.setItem('paymentStatus', 'success');
+          sessionStorage.setItem('paymentAmount', verifyJson.amount || sessionStorage.getItem('paymentAmount') || '0.00');
+          sessionStorage.setItem('paymentId', verifyJson.paymentId || '');
+          sessionStorage.setItem('paymentDocumentUrl', verifyJson.downloadUrl || '');
+          if (verifyJson.email) sessionStorage.setItem('checkoutEmail', verifyJson.email);
+        } else {
+          sessionStorage.setItem('paymentStatus', 'failed');
+        }
+      } catch (err) {
+        console.error(err);
+        sessionStorage.setItem('paymentStatus', 'failed');
+      }
+    }
+
     const status    = sessionStorage.getItem('paymentStatus') || 'failed';
     const amount    = sessionStorage.getItem('paymentAmount') || '0.00';
     const paymentId = sessionStorage.getItem('paymentId') || '';
@@ -350,6 +377,7 @@
     sessionStorage.removeItem('paymentStatus');
     sessionStorage.removeItem('paymentId');
     // Keep paymentAmount & email in case user retries
+    })();
   </script>
 
 </body>
