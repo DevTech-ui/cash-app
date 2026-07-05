@@ -1,6 +1,7 @@
 require('dotenv').config();
 const crypto = require('crypto');
 const dns = require('dns');
+const https = require('https');
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -657,11 +658,8 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
   const failures = [];
 
   for (const baseUrl of baseUrls) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(process.env.TAPTAPUP_TIMEOUT_MS || 12000));
-
     try {
-      response = await fetch(`${baseUrl}${endpoint}`, {
+      response = await requestJsonOverHttps(`${baseUrl}${endpoint}`, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -669,20 +667,18 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
           'X-Timestamp': timestamp,
           'X-Signature': signature,
         },
-        body: payload ? rawBody : undefined,
-        signal: controller.signal,
+        body: payload ? rawBody : '',
+        timeoutMs: Number(process.env.TAPTAPUP_TIMEOUT_MS || 12000),
       });
       break;
     } catch (err) {
       const failure = {
         url: `${baseUrl}${endpoint}`,
-        code: err?.cause?.code || err?.code || err.name,
+        code: err?.code || err.name,
         message: err?.message,
       };
       failures.push(failure);
       console.error('[TapTapUp] API request failed:', failure);
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -690,12 +686,7 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
     throw new Error(`Could not reach TapTapUp API. Tried: ${failures.map((failure) => failure.url).join(', ')}. Check Render outbound connectivity and TapTapUp IP allowlisting.`);
   }
 
-  let data;
-  try {
-    data = await response.json();
-  } catch (err) {
-    data = { success: false, message: 'TapTapUp returned a non-JSON response.' };
-  }
+  const data = response.data;
 
   if (!response.ok && data.success !== false) {
     data.success = false;
@@ -703,6 +694,63 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
   }
 
   return data;
+}
+
+function requestJsonOverHttps(url, { method = 'GET', headers = {}, body = '', timeoutMs = 12000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const requestBody = body || '';
+    const requestHeaders = {
+      ...headers,
+      Accept: 'application/json',
+    };
+
+    if (requestBody) {
+      requestHeaders['Content-Length'] = Buffer.byteLength(requestBody);
+    }
+
+    const request = https.request({
+      protocol: parsedUrl.protocol,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || 443,
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      method,
+      headers: requestHeaders,
+      family: 4,
+      timeout: timeoutMs,
+    }, (response) => {
+      let responseText = '';
+
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        responseText += chunk;
+      });
+      response.on('end', () => {
+        let data;
+        try {
+          data = responseText ? JSON.parse(responseText) : {};
+        } catch (err) {
+          data = { success: false, message: 'TapTapUp returned a non-JSON response.', raw: responseText.slice(0, 500) };
+        }
+
+        resolve({
+          ok: response.statusCode >= 200 && response.statusCode < 300,
+          status: response.statusCode,
+          data,
+        });
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(Object.assign(new Error(`TapTapUp request timed out after ${timeoutMs}ms`), { code: 'ETIMEDOUT' }));
+    });
+    request.on('error', reject);
+
+    if (requestBody) {
+      request.write(requestBody);
+    }
+    request.end();
+  });
 }
 
 function unwrapTapTapUpData(response) {
