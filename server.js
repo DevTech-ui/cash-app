@@ -544,6 +544,48 @@ app.get('/api/emails', async (req, res) => {
   }
 });
 
+app.get('/api/taptapup-diagnostics', async (req, res) => {
+  const { baseUrls } = getTapTapUpConfig();
+  const diagnostics = [];
+
+  for (const baseUrl of baseUrls) {
+    const hostname = new URL(baseUrl).hostname;
+    const result = { baseUrl, hostname };
+
+    try {
+      result.addresses = await dns.promises.lookup(hostname, { all: true });
+    } catch (err) {
+      result.dnsError = { code: err.code, message: err.message };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const startedAt = Date.now();
+      const response = await fetch(`${baseUrl}/status/diagnostic`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      result.http = {
+        ok: response.ok,
+        status: response.status,
+        elapsedMs: Date.now() - startedAt,
+      };
+    } catch (err) {
+      result.httpError = {
+        code: err?.cause?.code || err?.code || err.name,
+        message: err.message,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    diagnostics.push(result);
+  }
+
+  res.json({ success: true, diagnostics });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -575,19 +617,35 @@ function getTapTapUpConfig() {
   return {
     merchantId,
     sharedSecret,
-    baseUrl: normalizeTapTapUpBaseUrl(process.env.TAPTAPUP_API_BASE_URL || 'https://taptapup.xyz/api/v1'),
+    baseUrls: getTapTapUpBaseUrls(process.env.TAPTAPUP_API_BASE_URL || 'https://taptapup.xyz/api/v1'),
   };
 }
 
 function normalizeTapTapUpBaseUrl(rawBaseUrl) {
   const withProtocol = /^https?:\/\//i.test(rawBaseUrl) ? rawBaseUrl : `https://${rawBaseUrl}`;
   const parsedUrl = new URL(withProtocol.replace(/\/$/, ''));
-  parsedUrl.hostname = parsedUrl.hostname.replace(/^www\./i, '');
   return parsedUrl.toString().replace(/\/$/, '');
 }
 
+function getTapTapUpBaseUrls(rawBaseUrl) {
+  const primary = normalizeTapTapUpBaseUrl(rawBaseUrl);
+  const parsedPrimary = new URL(primary);
+  const hostWithoutWww = parsedPrimary.hostname.replace(/^www\./i, '');
+  const hostWithWww = hostWithoutWww.startsWith('www.') ? hostWithoutWww : `www.${hostWithoutWww}`;
+
+  const candidates = [primary];
+
+  for (const hostname of [hostWithoutWww, hostWithWww]) {
+    const candidate = new URL(primary);
+    candidate.hostname = hostname;
+    candidates.push(candidate.toString().replace(/\/$/, ''));
+  }
+
+  return [...new Set(candidates)];
+}
+
 async function callTapTapUp(endpoint, method = 'GET', payload) {
-  const { merchantId, sharedSecret, baseUrl } = getTapTapUpConfig();
+  const { merchantId, sharedSecret, baseUrls } = getTapTapUpConfig();
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const rawBody = payload ? JSON.stringify(payload) : '';
   const signature = crypto
@@ -596,29 +654,40 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
     .digest('hex');
 
   let response;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(process.env.TAPTAPUP_TIMEOUT_MS || 20000));
-  try {
-    response = await fetch(`${baseUrl}${endpoint}`, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Merchant-ID': merchantId,
-        'X-Timestamp': timestamp,
-        'X-Signature': signature,
-      },
-      body: payload ? rawBody : undefined,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    console.error('[TapTapUp] API request failed:', {
-      url: `${baseUrl}${endpoint}`,
-      code: err?.cause?.code || err?.code,
-      message: err?.message,
-    });
-    throw new Error(`Could not reach TapTapUp API at ${baseUrl}. Check TAPTAPUP_API_BASE_URL, Render outbound connectivity, and TapTapUp IP allowlisting.`);
-  } finally {
-    clearTimeout(timeout);
+  const failures = [];
+
+  for (const baseUrl of baseUrls) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(process.env.TAPTAPUP_TIMEOUT_MS || 12000));
+
+    try {
+      response = await fetch(`${baseUrl}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Merchant-ID': merchantId,
+          'X-Timestamp': timestamp,
+          'X-Signature': signature,
+        },
+        body: payload ? rawBody : undefined,
+        signal: controller.signal,
+      });
+      break;
+    } catch (err) {
+      const failure = {
+        url: `${baseUrl}${endpoint}`,
+        code: err?.cause?.code || err?.code || err.name,
+        message: err?.message,
+      };
+      failures.push(failure);
+      console.error('[TapTapUp] API request failed:', failure);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  if (!response) {
+    throw new Error(`Could not reach TapTapUp API. Tried: ${failures.map((failure) => failure.url).join(', ')}. Check Render outbound connectivity and TapTapUp IP allowlisting.`);
   }
 
   let data;
