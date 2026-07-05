@@ -572,8 +572,15 @@ function getTapTapUpConfig() {
   return {
     merchantId,
     sharedSecret,
-    baseUrl: (process.env.TAPTAPUP_API_BASE_URL || 'https://taptapup.xyz/api/v1').replace(/\/$/, ''),
+    baseUrl: normalizeTapTapUpBaseUrl(process.env.TAPTAPUP_API_BASE_URL || 'https://taptapup.xyz/api/v1'),
   };
+}
+
+function normalizeTapTapUpBaseUrl(rawBaseUrl) {
+  const withProtocol = /^https?:\/\//i.test(rawBaseUrl) ? rawBaseUrl : `https://${rawBaseUrl}`;
+  const parsedUrl = new URL(withProtocol.replace(/\/$/, ''));
+  parsedUrl.hostname = parsedUrl.hostname.replace(/^www\./i, '');
+  return parsedUrl.toString().replace(/\/$/, '');
 }
 
 async function callTapTapUp(endpoint, method = 'GET', payload) {
@@ -585,7 +592,9 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
     .update(`${timestamp}${rawBody}`)
     .digest('hex');
 
-  const response = await fetch(`${baseUrl}${endpoint}`, {
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${endpoint}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -594,7 +603,15 @@ async function callTapTapUp(endpoint, method = 'GET', payload) {
       'X-Signature': signature,
     },
     body: payload ? rawBody : undefined,
-  });
+    });
+  } catch (err) {
+    console.error('[TapTapUp] API request failed:', {
+      url: `${baseUrl}${endpoint}`,
+      code: err?.cause?.code || err?.code,
+      message: err?.message,
+    });
+    throw new Error(`Could not reach TapTapUp API at ${baseUrl}. Check TAPTAPUP_API_BASE_URL and Render outbound connectivity.`);
+  }
 
   let data;
   try {
