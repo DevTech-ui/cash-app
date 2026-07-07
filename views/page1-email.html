@@ -636,14 +636,14 @@
             <!-- <span style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#d1fae5;margin-bottom:8px;">Amount (USD)</span> -->
             <div class="amount-wrap">
               <span class="amount-prefix">$</span>
-              <input class="input amount" id="amount" name="amount" type="number" step="0.01" min="20"
-                placeholder="20.00" required
+              <input class="input amount" id="amount" name="amount" type="number" step="0.01" min="1"
+                placeholder="1.00" required
                 style="background:#fff;border-color:rgba(255,255,255,0.12);color:#111827;" />
             </div>
             <div class="quick-amounts" style="margin-top:8px;">
+              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='5.00'">$5</button>
+              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='10.00'">$10</button>
               <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='20.00'">$20</button>
-              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='25.00'">$25</button>
-              <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='50.00'">$50</button>
               <button type="button" class="quick-btn" onclick="document.getElementById('amount').value='100.00'">$100</button>
             </div>
           </div>
@@ -794,7 +794,7 @@
 
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showError('Please enter a valid email address.');
       if (!name) return showError('Please enter your full name.');
-      if (isNaN(parsed) || parsed < 20) return showError('Enter an amount of at least $20.00.');
+      if (isNaN(parsed) || parsed < 1) return showError('Enter an amount of at least $1.00.');
 
       // Disable button
       const btn = document.getElementById('saveBtn');

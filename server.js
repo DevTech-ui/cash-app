@@ -21,7 +21,7 @@ const DB_FILE = path.join(__dirname, 'data', 'emails.json');
 const documentDownloads = new Map();
 const taptapupPayments = new Map();
 const DOWNLOAD_TTL_MS = 15 * 60 * 1000;
-const MIN_PAYMENT_AMOUNT = Number(process.env.TAPTAPUP_MIN_AMOUNT || 20);
+const MIN_PAYMENT_AMOUNT = Number(process.env.TAPTAPUP_MIN_AMOUNT || 1);
 
 const submissionSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, index: true },
