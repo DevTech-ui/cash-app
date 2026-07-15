@@ -630,7 +630,7 @@
           <div class="section-label">Customer Information</div>
           <div>
             <h2 class="summary-title">Custom Website Design</h2>
-            <!-- <p class="summary-text">A polished, secure checkout flow with contact details and amount selection before Cash App Pay.</p> -->
+            <!-- <p class="summary-text">A polished, secure checkout flow with contact details and amount selection before TapTapUp.</p> -->
           </div>
           <div class="amount-pill" style="display:block;">
             <!-- <span style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#d1fae5;margin-bottom:8px;">Amount (USD)</span> -->
@@ -656,8 +656,8 @@
 
         <section class="form-panel">
           <div class="section-label">Payment Section</div>
-          <h1 class="pay-heading">Pay with TapTapUp</h1>
-          <!-- <p class="subtitle">Enter your details below, then continue to the Cash App Pay step. The payment flow and submission logic remain unchanged.</p> -->
+          <h1 class="pay-heading">Enter Your Amount</h1>
+          <!-- <p class="subtitle">Enter your details below, then continue to the TapTapUp step. The payment flow and submission logic remain unchanged.</p> -->
 
           <form id="checkoutForm" class="field-grid">
             <div>
@@ -695,11 +695,11 @@
               </div>
             </div>
 
-            <button id="saveBtn" class="btn" type="submit">Continue to TapTapUp</button>
+            <button id="saveBtn" class="btn" type="submit">Continue to cash app</button>
           </form>
 
           <div id="cash-app-pay" style="margin-top:8px"></div>
-          <p class="payment-note">You will be redirected to TapTapUp to complete the payment securely.</p>
+          <p class="payment-note">You will be redirected to Cash App to complete the payment securely.</p>
           <div id="status" class="status error"></div>
 
           <section id="successPanel" class="success-panel" aria-live="polite">
@@ -815,7 +815,7 @@
         sessionStorage.setItem('checkoutName', name);
         sessionStorage.setItem('paymentAmount', parsed.toFixed(2));
 
-        btn.textContent = 'Opening TapTapUp...';
+        btn.textContent = 'Opening Cash App...';
         processingOverlay.classList.add('show');
 
         const paymentJson = await postJsonWithRetry('/api/create-payment', { amount: parsed.toFixed(2), email, name });
@@ -823,7 +823,7 @@
           processingOverlay.classList.remove('show');
           showError(paymentJson.message || 'Could not start payment.');
           btn.disabled = false;
-          btn.textContent = 'Continue to TapTapUp';
+          btn.textContent = 'Continue to cash app';
           return;
         }
 
@@ -834,7 +834,7 @@
         processingOverlay.classList.remove('show');
         showError('Network or server error. Please try again.');
         document.getElementById('saveBtn').disabled = false;
-        document.getElementById('saveBtn').textContent = 'Continue to TapTapUp';
+        document.getElementById('saveBtn').textContent = 'Continue to cash app';
       }
     });
 
@@ -872,7 +872,7 @@
     resetBtn.addEventListener('click', () => {
       hideSuccess();
       document.getElementById('saveBtn').disabled = false;
-      document.getElementById('saveBtn').textContent = 'Continue to TapTapUp';
+      document.getElementById('saveBtn').textContent = 'Continue to cash app';
       document.getElementById('saveBtn').style.display = 'block';
       document.getElementById('cash-app-pay').innerHTML = '';
     });
